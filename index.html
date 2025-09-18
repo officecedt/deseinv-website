@@ -11,7 +11,7 @@
     <!-- Firebase Imports -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, onSnapshot, setDoc, updateDoc, increment, serverTimestamp, setLogLevel, getDoc, getDocs, deleteDoc, addDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Global variables
@@ -20,6 +20,7 @@
         let transactionsData = [];
         let studentSrMap = {};
         let currentItemToEdit = null;
+        const FIREBASE_PATH = "public/data";
 
         // Custom message box for UI feedback
         function showMessage(message, type = 'info', messageBoxId = 'message-box') {
@@ -57,23 +58,44 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
-                
-                let persistentUserId = localStorage.getItem('persistentUserId');
-                if (!persistentUserId) {
-                    persistentUserId = auth.currentUser.uid;
-                    localStorage.setItem('persistentUserId', persistentUserId);
-                }
-                userId = persistentUserId;
+                const mainContainer = document.getElementById('main-container');
+                const loadingMessage = document.getElementById('loading-message');
 
-                document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                // Wait for the user to be authenticated before enabling the UI
+                onAuthStateChanged(auth, (user) => {
+                    console.log("Authentication state changed. User:", user);
+                    if (user) {
+                        userId = user.uid;
+                        console.log("Authenticated with User ID:", userId);
+                        document.getElementById('user-id-display').textContent = `Team Collaboration Mode`;
+                        
+                        startRealtimeListeners(appId);
+                        
+                        // Show the main UI and hide the loading message
+                        mainContainer.classList.remove('hidden');
+                        loadingMessage.classList.add('hidden');
+                        showMessage("Database connected and ready!", "success");
+
+                    } else {
+                        console.log("No user is signed in. Attempting anonymous sign-in.");
+                        signInAnonymously(auth).catch((error) => {
+                            console.error("Anonymous sign-in failed:", error);
+                            document.getElementById('user-id-display').textContent = `Failed to connect.`;
+                            loadingMessage.textContent = 'Failed to connect to the database. Please check your network and try again.';
+                            mainContainer.classList.add('hidden');
+                            loadingMessage.classList.remove('hidden');
+                        });
+                    }
+                });
+
+                if (initialAuthToken) {
+                    // Try to sign in with the provided token first
+                    await signInWithCustomToken(auth, initialAuthToken).catch(error => {
+                        console.error("Custom token sign-in failed:", error);
+                        // Fallback to onAuthStateChanged which will handle the anonymous sign-in
+                    });
+                }
                 
-                startRealtimeListeners(appId);
-                showMessage("Database connected successfully!", "success");
             } catch (error) {
                 console.error("Firebase initialization failed:", error);
                 showMessage("Failed to connect to the database. Check the console for errors.", "error");
@@ -160,7 +182,7 @@
                 // If the barcode changes (due to name or part number or package change), we need to create a new document
                 // and delete the old one. Otherwise, just update the existing document.
                 if (oldBarcode !== newBarcode) {
-                    const newRef = doc(db, `artifacts/${appId}/users/${userId}/inventory`, newBarcode);
+                    const newRef = doc(db, `artifacts/${appId}/${FIREBASE_PATH}/inventory`, newBarcode);
                     await setDoc(newRef, {
                         ...currentItemToEdit,
                         barcode: newBarcode,
@@ -170,9 +192,9 @@
                         totalQuantity: newQuantity,
                         lastUpdated: serverTimestamp()
                     });
-                    await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/inventory`, oldBarcode));
+                    await deleteDoc(doc(db, `artifacts/${appId}/${FIREBASE_PATH}/inventory`, oldBarcode));
                 } else {
-                    const itemRef = doc(db, `artifacts/${appId}/users/${userId}/inventory`, oldBarcode);
+                    const itemRef = doc(db, `artifacts/${appId}/${FIREBASE_PATH}/inventory`, oldBarcode);
                     await updateDoc(itemRef, {
                         name: newName,
                         partNumber: newPartNumber,
@@ -198,7 +220,9 @@
                 console.error("Database, User ID or App ID not available for listeners.");
                 return;
             }
-            const inventoryCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/inventory`);
+            const inventoryCollectionPath = `artifacts/${appId}/${FIREBASE_PATH}/inventory`;
+            console.log(`Attempting to listen to inventory at path: ${inventoryCollectionPath}`);
+            const inventoryCollectionRef = collection(db, inventoryCollectionPath);
             onSnapshot(inventoryCollectionRef, (querySnapshot) => {
                 inventoryData = {};
                 querySnapshot.forEach((doc) => {
@@ -212,7 +236,9 @@
                 showMessage("Failed to sync inventory. Please refresh.", "error");
             });
 
-            const transactionsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/transactions`);
+            const transactionsCollectionPath = `artifacts/${appId}/${FIREBASE_PATH}/transactions`;
+            console.log(`Attempting to listen to transactions at path: ${transactionsCollectionPath}`);
+            const transactionsCollectionRef = collection(db, transactionsCollectionPath);
             onSnapshot(transactionsCollectionRef, (querySnapshot) => {
                 const transactionsList = document.getElementById('transactions-list');
                 transactionsList.innerHTML = '';
@@ -371,7 +397,7 @@
             // FIX: Include package in the barcode to ensure uniqueness
             const barcode = `${name.replace(/\s/g, '').toLowerCase()}-${partNumber.replace(/\s/g, '').toLowerCase()}-${packageValue.replace(/\s/g, '').toLowerCase()}`;
             const displayBarcode = "N/A";
-            const itemRef = doc(db, `artifacts/${appId}/users/${userId}/inventory`, barcode);
+            const itemRef = doc(db, `artifacts/${appId}/${FIREBASE_PATH}/inventory`, barcode);
             
             try {
                 const itemDoc = await getDoc(itemRef);
@@ -437,7 +463,7 @@
                     studentName: action === 'out' ? (studentName || 'N/A') : 'N/A',
                     srNumber: action === 'out' ? (srNumber || 'N/A') : 'N/A',
                 };
-                const transactionsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/transactions`);
+                const transactionsCollectionRef = collection(db, `artifacts/${appId}/${FIREBASE_PATH}/transactions`);
                 await addDoc(transactionsCollectionRef, transactionDoc);
 
                 showMessage(`Stock ${action === 'in' ? 'In' : 'Out'} successful for: ${name}!`, 'success', messageBoxId);
@@ -622,7 +648,7 @@
                             if (itemName && partNumber && packageValue && !isNaN(quantity)) {
                                 // FIX: Include package in the barcode during CSV import
                                 const barcode = `${itemName.replace(/\s/g, '').toLowerCase()}-${partNumber.replace(/\s/g, '').toLowerCase()}-${packageValue.replace(/\s/g, '').toLowerCase()}`;
-                                const itemRef = doc(db, `artifacts/${appId}/users/${userId}/inventory`, barcode);
+                                const itemRef = doc(db, `artifacts/${appId}/${FIREBASE_PATH}/inventory`, barcode);
                                 updates.push(setDoc(itemRef, {
                                     barcode: barcode,
                                     name: itemName,
@@ -652,7 +678,7 @@
         // Function to clear all inventory from the database
         async function clearInventory() {
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const inventoryCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/inventory`);
+            const inventoryCollectionRef = collection(db, `artifacts/${appId}/${FIREBASE_PATH}/inventory`);
             
             try {
                 const querySnapshot = await getDocs(inventoryCollectionRef);
@@ -664,7 +690,7 @@
                 }
                 
                 querySnapshot.forEach((docu) => {
-                    deletePromises.push(deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/inventory`, docu.id)));
+                    deletePromises.push(deleteDoc(doc(db, `artifacts/${appId}/${FIREBASE_PATH}/inventory`, docu.id)));
                 });
                 
                 await Promise.all(deletePromises);
@@ -679,7 +705,7 @@
         // Function to clear all transactions from the database
         async function clearTransactions() {
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const transactionsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/transactions`);
+            const transactionsCollectionRef = collection(db, `artifacts/${appId}/${FIREBASE_PATH}/transactions`);
 
             try {
                 const querySnapshot = await getDocs(transactionsCollectionRef);
@@ -826,7 +852,7 @@
     </header>
 
     <!-- Main Views Container -->
-    <main class="w-full max-w-4xl bg-white rounded-2xl shadow-xl p-8 mt-6">
+    <main id="main-container" class="w-full max-w-4xl bg-white rounded-2xl shadow-xl p-8 mt-6 hidden">
 
         <!-- Stock Out View -->
         <section id="stock-out-view" class="space-y-6">
@@ -957,6 +983,11 @@
             </div>
         </section>
     </main>
+
+    <!-- Loading message -->
+    <div id="loading-message" class="w-full max-w-4xl p-8 mt-6 text-center text-gray-500 font-semibold text-xl">
+        Connecting to database...
+    </div>
 
     <!-- Clear Transactions Confirmation Modal -->
     <div id="clear-transactions-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden">
