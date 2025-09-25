@@ -3,16 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DESE Electronics Inventory Management</title>
+    <title>DESE Inventory System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Firebase Imports -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, onSnapshot, setDoc, updateDoc, increment, serverTimestamp, setLogLevel, getDoc, getDocs, deleteDoc, addDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, onSnapshot, setDoc, updateDoc, increment, serverTimestamp, setLogLevel, getDoc, getDocs, deleteDoc, addDoc, writeBatch, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Global variables
         let app, auth, db, userId;
@@ -33,6 +34,50 @@
             }, 3000);
         }
 
+        // Custom confirmation modal
+        function showConfirmationModal(message, onConfirm) {
+            const modal = document.getElementById('confirmation-modal');
+            const messageText = document.getElementById('confirmation-message');
+            const confirmBtn = document.getElementById('confirm-yes');
+            const cancelBtn = document.getElementById('confirm-no');
+
+            messageText.textContent = message;
+            modal.classList.remove('hidden');
+
+            const handleConfirm = () => {
+                modal.classList.add('hidden');
+                onConfirm();
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+            };
+
+            const handleCancel = () => {
+                modal.classList.add('hidden');
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+            };
+
+            confirmBtn.addEventListener('click', handleConfirm);
+            cancelBtn.addEventListener('click', handleCancel);
+        }
+        
+        // Function to switch between different views
+        function switchView(viewId) {
+            document.querySelectorAll('.app-view').forEach(view => {
+                view.classList.add('hidden');
+            });
+            document.getElementById(viewId).classList.remove('hidden');
+
+            // Update active navigation link styling
+            document.querySelectorAll('nav button').forEach(button => {
+                button.classList.remove('bg-indigo-700', 'text-white');
+            });
+            const activeLink = document.querySelector(`[data-view-id="${viewId}"]`);
+            if (activeLink) {
+                activeLink.classList.add('bg-indigo-700', 'text-white');
+            }
+        }
+
         async function initializeFirebase() {
             try {
                 setLogLevel('debug');
@@ -42,7 +87,6 @@
                 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
                 const firebaseConfigFromCanvas = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
 
-                // Use Canvas config if available, otherwise use a default (or hardcoded) one.
                 const firebaseConfig = firebaseConfigFromCanvas || {
                     apiKey: "AIzaSyCKLZ3BWAl0Z48H0dnprdtn2cTQ7jKlTOg",
                     authDomain: "deseinventory.firebaseapp.com",
@@ -63,13 +107,7 @@
                     await signInAnonymously(auth);
                 }
                 
-                let persistentUserId = localStorage.getItem('persistentUserId');
-                if (!persistentUserId) {
-                    persistentUserId = auth.currentUser.uid;
-                    localStorage.setItem('persistentUserId', persistentUserId);
-                }
-                userId = persistentUserId;
-
+                const userId = auth.currentUser?.uid || crypto.randomUUID();
                 document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
                 
                 startRealtimeListeners(appId);
@@ -92,17 +130,17 @@
 
             data.forEach(item => {
                 const row = document.createElement('tr');
-                row.className = 'border-b hover:bg-gray-50 transition-colors duration-200';
+                row.className = 'border-b border-gray-200 hover:bg-gray-50 transition-colors duration-200';
                 row.innerHTML = `
                     <td class="p-4">${item.name || 'N/A'}</td>
                     <td class="p-4">${item.partNumber || 'N/A'}</td>
                     <td class="p-4">${item.package || 'N/A'}</td>
-                    <td class="p-4 text-center font-bold">${item.stockIn || 0}</td>
-                    <td class="p-4 text-center font-bold">${item.stockOut || 0}</td>
-                    <td class="p-4 text-center font-bold">${item.totalQuantity || 0}</td>
-                    <td class="p-4">${item.lastUpdated?.toDate().toLocaleString() || 'N/A'}</td>
+                    <td class="p-4 text-center font-bold text-green-600">${item.stockIn || 0}</td>
+                    <td class="p-4 text-center font-bold text-red-600">${item.stockOut || 0}</td>
+                    <td class="p-4 text-center font-bold text-indigo-700">${item.totalQuantity || 0}</td>
+                    <td class="p-4 text-sm text-gray-500">${item.lastUpdated?.toDate().toLocaleString() || 'N/A'}</td>
                     <td class="p-4 text-center">
-                        <button class="edit-btn px-4 py-2 bg-yellow-500 text-white font-semibold rounded-full shadow-md hover:bg-yellow-600 transition-colors duration-200" data-item-id="${item.barcode}">Edit</button>
+                        <button class="edit-btn px-4 py-2 bg-yellow-500 text-white font-semibold rounded-full shadow-md hover:bg-yellow-600 transition-colors duration-200" data-item-id="${item.barcode}"><i class="fas fa-edit mr-2"></i>Edit</button>
                     </td>
                 `;
                 inventoryList.appendChild(row);
@@ -146,21 +184,17 @@
                 return;
             }
 
-            if (!db || !userId) {
-                showMessage("Database not connected. Please refresh the page.", "error", 'message-box-edit');
+            if (!db || !auth.currentUser) {
+                showMessage("Database not connected or user not authenticated. Please refresh the page.", "error", 'message-box-edit');
                 return;
             }
 
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
             const oldBarcode = currentItemToEdit.barcode;
-            // FIX: Include package in the new barcode
             const newBarcode = `${newName.replace(/\s/g, '').toLowerCase()}-${newPartNumber.replace(/\s/g, '').toLowerCase()}-${newPackage.replace(/\s/g, '').toLowerCase()}`;
 
             try {
-                // If the barcode changes (due to name or part number or package change), we need to create a new document
-                // and delete the old one. Otherwise, just update the existing document.
                 if (oldBarcode !== newBarcode) {
-                    // Update: Changed path to public for team collaboration
                     const newRef = doc(db, `artifacts/${appId}/public/data/inventory`, newBarcode);
                     await setDoc(newRef, {
                         ...currentItemToEdit,
@@ -171,10 +205,8 @@
                         totalQuantity: newQuantity,
                         lastUpdated: serverTimestamp()
                     });
-                    // Update: Changed path to public for team collaboration
                     await deleteDoc(doc(db, `artifacts/${appId}/public/data/inventory`, oldBarcode));
                 } else {
-                    // Update: Changed path to public for team collaboration
                     const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, oldBarcode);
                     await updateDoc(itemRef, {
                         name: newName,
@@ -197,11 +229,10 @@
         
         // Listen for real-time inventory and transaction updates
         function startRealtimeListeners(appId) {
-            if (!db || !userId || !appId) {
-                console.error("Database, User ID or App ID not available for listeners.");
+            if (!db || !appId) {
+                console.error("Database or App ID not available for listeners.");
                 return;
             }
-            // Update: Changed path to public for team collaboration
             const inventoryCollectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
             onSnapshot(inventoryCollectionRef, (querySnapshot) => {
                 inventoryData = {};
@@ -209,56 +240,125 @@
                     const data = doc.data();
                     inventoryData[data.barcode] = data;
                 });
-                // Initially render the full list
                 renderInventoryTable(Object.values(inventoryData));
             }, (error) => {
                 console.error("Failed to fetch real-time inventory updates:", error);
                 showMessage("Failed to sync inventory. Please refresh.", "error");
             });
 
-            // Update: Changed path to public for team collaboration
             const transactionsCollectionRef = collection(db, `artifacts/${appId}/public/data/transactions`);
             onSnapshot(transactionsCollectionRef, (querySnapshot) => {
-                const transactionsList = document.getElementById('transactions-list');
-                transactionsList.innerHTML = '';
                 transactionsData = [];
                 studentSrMap = {}; // Reset the map
-                let hasStockOut = false;
                 querySnapshot.forEach((doc) => {
                     const data = doc.data();
-                    transactionsData.push(data);
+                    transactionsData.push({id: doc.id, ...data});
                     
-                    if (data.type === 'out') {
-                        hasStockOut = true;
-                        // Populate the studentSrMap for auto-fill functionality
-                        if (data.studentName) {
-                            studentSrMap[data.studentName.toLowerCase()] = data.srNumber;
-                        }
-                        const row = document.createElement('tr');
-                        row.className = 'border-b hover:bg-gray-50 transition-colors duration-200';
-                        row.innerHTML = `
-                            <td class="p-4">${data.studentName || 'N/A'}</td>
-                            <td class="p-4">${data.srNumber || 'N/A'}</td>
-                            <td class="p-4">${data.name || 'N/A'}</td>
-                            <td class="p-4">${data.partNumber || 'N/A'}</td>
-                            <td class="p-4">${data.package || 'N/A'}</td>
-                            <td class="p-4 text-center font-bold">${data.quantity || 0}</td>
-                            <td class="p-4">${data.timestamp?.toDate().toLocaleString() || 'N/A'}</td>
-                        `;
-                        transactionsList.appendChild(row);
+                    if (data.type === 'out' && data.studentName) {
+                        studentSrMap[data.studentName.toLowerCase()] = data.srNumber;
                     }
                 });
-                
-                if (!hasStockOut) {
-                    transactionsList.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-gray-500">No stock out transactions yet.</td></tr>';
-                }
-
+                renderTransactionsTable();
             }, (error) => {
                 console.error("Failed to fetch real-time transaction updates:", error);
                 showMessage("Failed to sync transactions. Please refresh.", "error");
             });
         }
         
+        // Render the transactions table
+        function renderTransactionsTable(dataToRender = transactionsData) {
+            const transactionsList = document.getElementById('transactions-list');
+            transactionsList.innerHTML = '';
+            
+            const sortedTransactions = dataToRender.filter(t => t.type === 'out').sort((a, b) => b.timestamp - a.timestamp);
+            
+            if (sortedTransactions.length === 0) {
+                transactionsList.innerHTML = '<tr><td colspan="9" class="text-center p-4 text-gray-500">No matching transactions found.</td></tr>';
+                return;
+            }
+
+            sortedTransactions.forEach(transaction => {
+                const isReturned = transaction.isReturned || false;
+                const rowClass = isReturned ? 'bg-green-50/50' : 'bg-red-50/50';
+                const buttonClass = isReturned ? 'opacity-50 cursor-not-allowed' : '';
+                const buttonDisabled = isReturned ? 'disabled' : '';
+
+                const row = document.createElement('tr');
+                row.className = `border-b border-gray-200 ${rowClass} hover:bg-gray-50 transition-colors duration-200`;
+                row.innerHTML = `
+                    <td class="p-4">${transaction.studentName || 'N/A'}</td>
+                    <td class="p-4">${transaction.srNumber || 'N/A'}</td>
+                    <td class="p-4">${transaction.name || 'N/A'}</td>
+                    <td class="p-4">${transaction.partNumber || 'N/A'}</td>
+                    <td class="p-4">${transaction.package || 'N/A'}</td>
+                    <td class="p-4 text-center font-bold">${transaction.quantity || 0}</td>
+                    <td class="p-4 text-sm text-gray-500">${transaction.timestamp?.toDate().toLocaleString() || 'N/A'}</td>
+                    <td class="p-4 text-center font-bold">
+                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${isReturned ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}">${isReturned ? 'Returned' : 'Pending'}</span>
+                    </td>
+                    <td class="p-4 text-center">
+                        <button onclick="returnItem('${transaction.id}')" class="px-4 py-2 bg-purple-500 text-white font-semibold rounded-full shadow-md hover:bg-purple-600 transition-colors duration-200 ${buttonClass}" ${buttonDisabled}><i class="fas fa-undo mr-2"></i>Return</button>
+                    </td>
+                `;
+                transactionsList.appendChild(row);
+            });
+        }
+        
+        // --- NEW RETURN LOGIC ---
+        async function returnItem(transactionId) {
+            if (!db || !auth.currentUser) {
+                showMessage("Database not connected or user not authenticated. Please refresh the page.", "error");
+                return;
+            }
+
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const transactionRef = doc(db, `artifacts/${appId}/public/data/transactions`, transactionId);
+                    const transactionDoc = await transaction.get(transactionRef);
+
+                    if (!transactionDoc.exists()) {
+                        throw new Error("Transaction document not found.");
+                    }
+                    
+                    const transactionData = transactionDoc.data();
+                    if (transactionData.isReturned) {
+                        throw new Error("This item has already been returned.");
+                    }
+                    
+                    const itemBarcode = transactionData.barcode;
+                    const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, itemBarcode);
+                    const itemDoc = await transaction.get(itemRef);
+
+                    if (!itemDoc.exists()) {
+                        throw new Error("Corresponding inventory item not found.");
+                    }
+
+                    const quantityToReturn = transactionData.quantity;
+
+                    // Update inventory: increment quantity
+                    transaction.update(itemRef, {
+                        totalQuantity: increment(quantityToReturn),
+                        stockOut: increment(-quantityToReturn), // Decrease stock out count
+                        lastUpdated: serverTimestamp()
+                    });
+
+                    // Update transaction record: mark as returned
+                    transaction.update(transactionRef, {
+                        isReturned: true,
+                        returnedAt: serverTimestamp()
+                    });
+                });
+
+                showMessage("Item returned successfully!", "success");
+            } catch (e) {
+                console.error("Error during return transaction:", e);
+                showMessage(`Error returning item: ${e.message}`, "error");
+            }
+        }
+        // --- END OF NEW RETURN LOGIC ---
+
         // --- NEW LOGIC FOR STUDENT NAME AUTO-FILL ---
         function handleStudentNameInput(event) {
             const typedName = event.target.value.trim().toLowerCase();
@@ -290,7 +390,6 @@
                 studentMessage.textContent = '';
             }
         }
-        // --- END OF NEW LOGIC ---
 
         // --- NEW LOGIC FOR STOCK-OUT FORM ---
         function handleItemNameInput(event) {
@@ -300,7 +399,6 @@
             const suggestionsContainer = document.getElementById('item-suggestions');
             const messageBox = document.getElementById('autofill-message-stock-out');
 
-            // Reset fields and suggestions
             partNumberInput.value = '';
             packageInput.value = '';
             suggestionsContainer.innerHTML = '';
@@ -310,7 +408,8 @@
             if (searchTerm.length === 0) return;
 
             const matches = Object.values(inventoryData).filter(item => 
-                item.name && item.name.toLowerCase().includes(searchTerm)
+                (item.name && item.name.toLowerCase().includes(searchTerm)) ||
+                (item.partNumber && item.partNumber.toLowerCase().includes(searchTerm))
             );
             
             if (matches.length === 1) {
@@ -367,28 +466,24 @@
                 showMessage("Invalid item name, part number, package, or quantity.", "error", messageBoxId);
                 return;
             }
-            if (!db || !userId) {
-                showMessage("Database not connected. Please refresh the page.", "error", messageBoxId);
+            if (!db || !auth.currentUser) {
+                showMessage("Database not connected or user not authenticated. Please refresh the page.", "error", messageBoxId);
                 return;
             }
             
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            // FIX: Include package in the barcode to ensure uniqueness
             const barcode = `${name.replace(/\s/g, '').toLowerCase()}-${partNumber.replace(/\s/g, '').toLowerCase()}-${packageValue.replace(/\s/g, '').toLowerCase()}`;
             const displayBarcode = "N/A";
-            // Update: Changed path to public for team collaboration
             const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, barcode);
             
             try {
                 const itemDoc = await getDoc(itemRef);
                 const currentQuantity = itemDoc.exists() ? itemDoc.data().totalQuantity : 0;
                 
-                // --- FIX FOR NEGATIVE STOCK GLITCH ---
                 if (action === 'out' && quantity > currentQuantity) {
                     showMessage(`Error: Cannot stock out ${quantity} units. Only ${currentQuantity} are available.`, "error", messageBoxId);
                     return;
                 }
-                // --- END OF FIX ---
 
                 const updateData = {
                     totalQuantity: increment(action === 'in' ? quantity : -quantity),
@@ -429,7 +524,6 @@
                     await setDoc(itemRef, newDoc);
                 }
 
-                // Create a transaction document for history
                 const transactionDoc = {
                     type: action,
                     barcode: barcode,
@@ -439,13 +533,11 @@
                     package: packageValue,
                     quantity: quantity,
                     timestamp: serverTimestamp(),
-                    // Update: Added userId to track who made the change
-                    userId: userId,
-                    // Only include these fields for stock-out transactions
+                    userId: auth.currentUser.uid,
                     studentName: action === 'out' ? (studentName || 'N/A') : 'N/A',
                     srNumber: action === 'out' ? (srNumber || 'N/A') : 'N/A',
+                    isReturned: false // New field to track returns
                 };
-                // Update: Changed path to public for team collaboration
                 const transactionsCollectionRef = collection(db, `artifacts/${appId}/public/data/transactions`);
                 await addDoc(transactionsCollectionRef, transactionDoc);
 
@@ -464,7 +556,6 @@
             const packageValue = document.getElementById('stock-in-package').value.trim();
             const quantity = parseInt(document.getElementById('stock-in-quantity').value.trim(), 10);
             
-            // Check for required fields: itemName, partNumber, and quantity.
             if (!itemName || !partNumber || !packageValue || quantity <= 0) {
                 showMessage("Please fill out all required fields correctly.", "error", 'message-box-stock-in');
                 return;
@@ -483,25 +574,21 @@
             const partNumber = document.getElementById('stock-out-part-number').value.trim();
             const srNumber = document.getElementById('stock-out-sr-number').value.trim();
             
-            // Package information will be automatically filled from the database.
             const packageValue = document.getElementById('stock-out-package').value.trim();
 
             if (itemName && partNumber && quantity > 0) {
                 await updateInventory(itemName, studentName, srNumber, partNumber, packageValue, quantity, 'out', 'message-box-stock-out');
                 document.getElementById('stock-out-form').reset();
-                // Set focus back to the first input field after successful transaction
                 document.getElementById('stock-out-student-name').focus();
             } else {
                 showMessage("Please fill out item name, part number, and quantity correctly.", "error", 'message-box-stock-out');
             }
         }
-
+        
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' && event.target.form?.id === 'stock-out-form') {
-                // Special handling for the student name field to skip the disabled SR number field
                 if (event.target.id === 'stock-out-student-name') {
                     const srNumberInput = document.getElementById('stock-out-sr-number');
-                    // Check if the SR Number field has been auto-filled (i.e., is disabled)
                     if (srNumberInput.disabled) {
                         event.preventDefault();
                         document.getElementById('stock-out-item-name').focus();
@@ -513,13 +600,10 @@
                 const formFields = Array.from(form.elements).filter(el => el.tagName === 'INPUT');
                 const currentIndex = formFields.indexOf(event.target);
                 
-                // If it's the last input field, let the form submit.
                 if (currentIndex === formFields.length - 1) {
                     return;
                 }
                 
-                // For all other fields, prevent the default 'Enter' behavior (submission)
-                // and move focus to the next field.
                 event.preventDefault();
                 const nextIndex = currentIndex + 1;
                 if (nextIndex < formFields.length) {
@@ -565,12 +649,13 @@
                 return;
             }
 
-            const header = "Student Name,SR Number,Item Name,Part Number,Package,Quantity,Timestamp\n";
+            const header = "Student Name,SR Number,Item Name,Part Number,Package,Quantity,Timestamp,Status\n";
             let csv = header;
 
             stockOutTransactions.forEach(transaction => {
                 const timestamp = transaction.timestamp?.toDate().toLocaleString() || 'N/A';
-                const row = `"${transaction.studentName || 'N/A'}","${transaction.srNumber || 'N/A'}","${transaction.name || 'N/A'}","${transaction.partNumber || 'N/A'}","${transaction.package || 'N/A'}",${transaction.quantity},"${timestamp}"\n`;
+                const status = transaction.isReturned ? 'Returned' : 'Pending';
+                const row = `"${transaction.studentName || 'N/A'}","${transaction.srNumber || 'N/A'}","${transaction.name || 'N/A'}","${transaction.partNumber || 'N/A'}","${transaction.package || 'N/A'}",${transaction.quantity},"${timestamp}","${status}"\n`;
                 csv += row;
             });
 
@@ -596,393 +681,428 @@
             const reader = new FileReader();
             reader.onload = async function(e) {
                 const text = e.target.result;
-                const lines = text.split('\n');
-                if (lines.length <= 1) {
-                    showMessage("CSV file is empty or has no data.", "error");
+                const rows = text.split('\n');
+                if (rows.length <= 1) {
+                    showMessage("CSV file is empty or has no data rows.", "error");
+                    return;
+                }
+                const header = rows[0].split(',').map(h => h.trim().replace(/"/g, ''));
+                if (!db || !auth.currentUser) {
+                    showMessage("Database not connected. Please refresh.", "error");
                     return;
                 }
                 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-                const updates = [];
-                // Use the header to find the column indices dynamically
-                const header = lines[0].split(',').map(h => h.trim().toLowerCase());
-                const itemNameIndex = header.indexOf('item name');
-                // Check for 'part number' first, then 'part name' as a fallback
-                const partNumberIndex = header.indexOf('part number') !== -1 ? header.indexOf('part number') : header.indexOf('part name');
-                const packageIndex = header.indexOf('package');
-                // Use 'stock in count' as the source for quantity
-                const stockIndex = header.indexOf('stock in count');
-                
-                // Now, check if all required columns are found
-                if (itemNameIndex === -1 || partNumberIndex === -1 || packageIndex === -1 || stockIndex === -1) {
-                    showMessage("CSV file must contain 'Item Name', 'Part Number' (or 'Part Name'), 'Package', and 'Stock In Count' columns.", "error");
-                    return;
+                const batch = writeBatch(db);
+                const importMessageId = 'message-box-import';
+                let successCount = 0;
+                let errorCount = 0;
+
+                showMessage("Starting import...", "info", importMessageId);
+
+                for (let i = 1; i < rows.length; i++) {
+                    const row = rows[i].trim();
+                    if (!row) continue;
+
+                    const values = row.split(',').map(v => v.trim().replace(/"/g, ''));
+                    const item = {};
+                    header.forEach((key, index) => {
+                        item[key] = values[index];
+                    });
+                    
+                    const itemName = item['Item Name'] || '';
+                    const partNumber = item['Part Number'] || '';
+                    const packageValue = item['Package'] || '';
+                    const totalQuantity = parseInt(item['Available Stock'], 10);
+                    const stockIn = parseInt(item['Stock In Count'], 10) || 0;
+                    const stockOut = parseInt(item['Stock Out Count'], 10) || 0;
+
+                    if (!itemName || !partNumber || !packageValue || isNaN(totalQuantity)) {
+                        console.error("Skipping invalid row:", item);
+                        errorCount++;
+                        continue;
+                    }
+                    
+                    const barcode = `${itemName.replace(/\s/g, '').toLowerCase()}-${partNumber.replace(/\s/g, '').toLowerCase()}-${packageValue.replace(/\s/g, '').toLowerCase()}`;
+                    const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, barcode);
+
+                    batch.set(itemRef, {
+                        barcode: barcode,
+                        name: itemName,
+                        partNumber: partNumber,
+                        package: packageValue,
+                        totalQuantity: totalQuantity,
+                        stockIn: stockIn,
+                        stockOut: stockOut,
+                        lastUpdated: serverTimestamp()
+                    });
+                    successCount++;
                 }
 
-                for (let i = 1; i < lines.length; i++) {
-                    const line = lines[i].trim();
-                    if (line) {
-                        const values = line.match(/(?:\"[^\"]*\"|[^,])+/g);
-                        if (values && values.length > 0) {
-                            const itemName = (values[itemNameIndex] || '').replace(/"/g, '').trim();
-                            const partNumber = (values[partNumberIndex] || '').replace(/"/g, '').trim();
-                            const packageValue = (values[packageIndex] || '').replace(/"/g, '').trim();
-                            const quantity = parseInt((values[stockIndex] || '0').replace(/"/g, '').trim(), 10);
-                            
-                            if (itemName && partNumber && packageValue && !isNaN(quantity)) {
-                                // FIX: Include package in the barcode during CSV import
-                                const barcode = `${itemName.replace(/\s/g, '').toLowerCase()}-${partNumber.replace(/\s/g, '').toLowerCase()}-${packageValue.replace(/\s/g, '').toLowerCase()}`;
-                                // Update: Changed path to public for team collaboration
-                                const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, barcode);
-                                updates.push(setDoc(itemRef, {
-                                    barcode: barcode,
-                                    name: itemName,
-                                    partNumber: partNumber,
-                                    package: packageValue,
-                                    totalQuantity: increment(quantity),
-                                    stockIn: increment(quantity),
-                                    lastUpdated: serverTimestamp(),
-                                }, { merge: true }));
-                            }
-                        }
-                    }
-                }
-                
                 try {
-                    await Promise.all(updates);
-                    showMessage(`Successfully imported ${updates.length} items from CSV!`, "success");
-                    document.getElementById('csv-file-input').value = null;
+                    await batch.commit();
+                    showMessage(`Import successful! ${successCount} items processed.`, "success", importMessageId);
                 } catch (e) {
-                    console.error("Error importing data:", e);
-                    showMessage("Error importing data. Check console for details.", "error");
+                    console.error("Batch write failed:", e);
+                    showMessage(`Import failed. ${successCount} items processed before the error. Check console.`, "error", importMessageId);
                 }
             };
             reader.readAsText(file);
         }
-        
-        // Function to clear all inventory from the database
+
+        // Function to delete all inventory items
         async function clearInventory() {
+            if (!db || !auth.currentUser) {
+                showMessage("Database not connected or user not authenticated. Please refresh.", "error");
+                return;
+            }
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            // Update: Changed path to public for team collaboration
             const inventoryCollectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
+            showMessage("Clearing inventory...", "info");
             
             try {
                 const querySnapshot = await getDocs(inventoryCollectionRef);
-                const deletePromises = [];
-                
                 if (querySnapshot.empty) {
-                    showMessage("Inventory is already empty!", "info");
-                    return;
-                }
-                
-                querySnapshot.forEach((docu) => {
-                    // Update: Changed path to public for team collaboration
-                    deletePromises.push(deleteDoc(doc(db, `artifacts/${appId}/public/data/inventory`, docu.id)));
-                });
-                
-                await Promise.all(deletePromises);
-                showMessage("All inventory items have been successfully cleared!", "success");
-
-            } catch (e) {
-                console.error("Error clearing inventory:", e);
-                showMessage("An error occurred while clearing the inventory. Check the console.", "error");
-            }
-        }
-
-        // Function to clear all transactions from the database
-        async function clearTransactions() {
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            // Update: Changed path to public for team collaboration
-            const transactionsCollectionRef = collection(db, `artifacts/${appId}/public/data/transactions`);
-
-            try {
-                const querySnapshot = await getDocs(transactionsCollectionRef);
-                
-                if (querySnapshot.empty) {
-                    showMessage("Transaction history is already empty!", "info");
+                    showMessage("Inventory is already empty. Nothing to clear.", "success");
                     return;
                 }
 
                 const batch = writeBatch(db);
-                querySnapshot.forEach((docu) => {
-                    batch.delete(docu.ref);
+                querySnapshot.docs.forEach(doc => {
+                    batch.delete(doc.ref);
                 });
-
                 await batch.commit();
-                showMessage("All transaction history has been successfully cleared!", "success");
+                showMessage("Inventory cleared successfully!", "success");
             } catch (e) {
-                console.error("Error clearing transactions:", e);
-                showMessage("An error occurred while clearing transaction history.", "error");
+                console.error("Error clearing inventory:", e);
+                showMessage("Failed to clear inventory. Check console for details.", "error");
             }
         }
-        
-        // Function to switch between views and update mode
-        function switchView(viewId) {
-            const views = ['stock-out-view', 'stock-in-view', 'inventory-view', 'transactions-view', 'edit-view'];
-            views.forEach(id => document.getElementById(id).classList.add('hidden'));
-            document.getElementById(viewId).classList.remove('hidden');
 
-            const buttons = {
-                'stock-out-view': 'stock-out-btn',
-                'stock-in-view': 'stock-in-btn',
-                'inventory-view': 'view-inventory-btn',
-                'transactions-view': 'view-transactions-btn',
-                'edit-view': null,
-            };
-            
-            Object.values(buttons).filter(id => id).forEach(buttonId => {
-                document.getElementById(buttonId).classList.remove('bg-indigo-600', 'text-white');
-                document.getElementById(buttonId).classList.add('bg-gray-300', 'text-gray-800');
-            });
-            if (buttons[viewId]) {
-                document.getElementById(buttons[viewId]).classList.remove('bg-gray-300', 'text-gray-800');
-                document.getElementById(buttons[viewId]).classList.add('bg-indigo-600', 'text-white');
+        // Function to delete all transaction history
+        async function clearTransactions() {
+            if (!db || !auth.currentUser) {
+                showMessage("Database not connected or user not authenticated. Please refresh.", "error");
+                return;
             }
-            
-            document.getElementById('confirm-clear-btn').classList.add('hidden');
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const transactionsCollectionRef = collection(db, `artifacts/${appId}/public/data/transactions`);
+            showMessage("Clearing transaction history...", "info");
+
+            try {
+                const querySnapshot = await getDocs(transactionsCollectionRef);
+                if (querySnapshot.empty) {
+                    showMessage("Transaction history is already empty. Nothing to clear.", "success");
+                    return;
+                }
+
+                const batch = writeBatch(db);
+                querySnapshot.docs.forEach(doc => {
+                    batch.delete(doc.ref);
+                });
+                await batch.commit();
+                showMessage("Transaction history cleared successfully!", "success");
+            } catch (e) {
+                console.error("Error clearing transactions:", e);
+                showMessage("Failed to clear transaction history. Check console for details.", "error");
+            }
+        }
+
+        function handleSearch(event) {
+            const searchTerm = event.target.value.toLowerCase().trim();
+            const filteredData = Object.values(inventoryData).filter(item => 
+                (item.name && item.name.toLowerCase().includes(searchTerm)) ||
+                (item.partNumber && item.partNumber.toLowerCase().includes(searchTerm)) ||
+                (item.package && item.package.toLowerCase().includes(searchTerm)) ||
+                (item.barcode && item.barcode.toLowerCase().includes(searchTerm))
+            );
+            renderInventoryTable(filteredData);
+        }
+
+        // New function to handle searching transactions
+        function handleTransactionSearch(event) {
+            const searchTerm = event.target.value.toLowerCase().trim();
+            const filteredData = transactionsData.filter(transaction => {
+                if (transaction.type !== 'out') return false;
+                const matchesStudent = transaction.studentName && transaction.studentName.toLowerCase().includes(searchTerm);
+                const matchesSrNumber = transaction.srNumber && transaction.srNumber.toLowerCase().includes(searchTerm);
+                const matchesItemName = transaction.name && transaction.name.toLowerCase().includes(searchTerm);
+                const matchesPartNumber = transaction.partNumber && transaction.partNumber.toLowerCase().includes(searchTerm);
+                const matchesPackage = transaction.package && transaction.package.toLowerCase().includes(searchTerm);
+                return matchesStudent || matchesSrNumber || matchesItemName || matchesPartNumber || matchesPackage;
+            });
+            renderTransactionsTable(filteredData);
         }
 
         document.addEventListener('DOMContentLoaded', () => {
             initializeFirebase();
-            
-            // UI button handlers
-            document.getElementById('stock-out-btn').addEventListener('click', () => switchView('stock-out-view'));
-            document.getElementById('stock-in-btn').addEventListener('click', () => switchView('stock-in-view'));
-            document.getElementById('view-inventory-btn').addEventListener('click', () => switchView('inventory-view'));
-            document.getElementById('view-transactions-btn').addEventListener('click', () => switchView('transactions-view'));
 
+            // Setup event listeners
+            document.getElementById('inventory-link').addEventListener('click', () => switchView('inventory-view'));
+            document.getElementById('stock-in-link').addEventListener('click', () => switchView('stock-in-view'));
+            document.getElementById('stock-out-link').addEventListener('click', () => switchView('stock-out-view'));
+            document.getElementById('transactions-link').addEventListener('click', () => switchView('transactions-view'));
+            document.getElementById('back-to-inventory').addEventListener('click', () => switchView('inventory-view'));
             document.getElementById('stock-in-form').addEventListener('submit', handleStockInForm);
             document.getElementById('stock-out-form').addEventListener('submit', handleStockOutForm);
             document.getElementById('edit-form').addEventListener('submit', handleEditForm);
-            document.getElementById('cancel-edit-btn').addEventListener('click', () => switchView('inventory-view'));
-
             document.getElementById('export-inventory-btn').addEventListener('click', exportInventoryToCsv);
             document.getElementById('export-transactions-btn').addEventListener('click', exportTransactionsToCsv);
-            document.getElementById('csv-file-input').addEventListener('change', importFromCsv);
+            document.getElementById('import-csv-input').addEventListener('change', importFromCsv);
+            document.getElementById('search-input').addEventListener('input', handleSearch);
             
-            document.getElementById('clear-btn').addEventListener('click', () => {
-                document.getElementById('confirm-clear-btn').classList.remove('hidden');
+            // New clear buttons
+            document.getElementById('clear-inventory-btn').addEventListener('click', () => {
+                showConfirmationModal("Are you sure you want to clear ALL inventory data? This action cannot be undone.", clearInventory);
             });
             document.getElementById('clear-transactions-btn').addEventListener('click', () => {
-                 document.getElementById('clear-transactions-modal').classList.remove('hidden');
-            });
-            document.getElementById('confirm-clear-transactions-btn').addEventListener('click', async () => {
-                await clearTransactions();
-                document.getElementById('clear-transactions-modal').classList.add('hidden');
-            });
-            document.getElementById('cancel-clear-transactions-btn').addEventListener('click', () => {
-                document.getElementById('clear-transactions-modal').classList.add('hidden');
-            });
-            document.getElementById('confirm-clear-btn').addEventListener('click', async () => {
-                await clearInventory();
-                document.getElementById('confirm-clear-btn').classList.add('hidden');
+                showConfirmationModal("Are you sure you want to clear ALL transaction history? This action cannot be undone.", clearTransactions);
             });
 
-            // New search bar for inventory
-            document.getElementById('inventory-search').addEventListener('input', (event) => {
-                const searchTerm = event.target.value.toLowerCase().trim();
-                const filteredItems = Object.values(inventoryData).filter(item => {
-                    // Check if stock is available
-                    const hasStock = item.totalQuantity > 0;
-                    
-                    if (!hasStock) return false;
+            // New search listener for transactions
+            document.getElementById('transaction-search-input').addEventListener('input', handleTransactionSearch);
 
-                    // Check if search term matches any key fields
-                    const itemName = (item.name || '').toLowerCase().includes(searchTerm);
-                    const partNumber = (item.partNumber || '').toLowerCase().includes(searchTerm);
-                    const packageValue = (item.package || '').toLowerCase().includes(searchTerm);
-                    
-                    return itemName || partNumber || packageValue;
-                });
-                renderInventoryTable(filteredItems);
-            });
-            
-            // Event listener for the student name auto-fill
+            // Autofill listeners
             document.getElementById('stock-out-student-name').addEventListener('input', handleStudentNameInput);
-
-            // Event listener for the item name search logic
             document.getElementById('stock-out-item-name').addEventListener('input', handleItemNameInput);
-
-
-            // Set initial view
-            switchView('stock-out-view');
         });
+        
+        // Expose functions to the global scope for event handlers in the HTML
+        window.returnItem = returnItem;
     </script>
     <style>
         body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f7fafc;
+            background-color: #e2e8f0;
+            background-image: linear-gradient(135deg, #f0f4f8 25%, transparent 25%), linear-gradient(-135deg, #f0f4f8 25%, transparent 25%), linear-gradient(45deg, #f0f4f8 25%, transparent 25%), linear-gradient(-45deg, #f0f4f8 25%, transparent 25%);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 0, 10px -10px, 0 10px;
+        }
+        .glow-focus:focus {
+            outline: none;
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.4);
         }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen flex flex-col items-center p-4">
+<body class="bg-gray-50 text-gray-800 font-['Inter'] flex flex-col min-h-screen">
+    <div class="container mx-auto p-4 md:p-8 flex-grow">
+        <!-- Header and Navigation -->
+        <header class="bg-white rounded-2xl shadow-2xl p-6 mb-8 transform hover:scale-105 transition-transform duration-300">
+            <div class="flex flex-col md:flex-row justify-between items-center mb-4">
+                <h1 class="text-3xl md:text-4xl font-extrabold text-indigo-700 mb-2 md:mb-0">DESE Inventory System</h1>
+                <p id="user-id-display" class="text-sm font-medium text-gray-500 bg-gray-100 px-4 py-2 rounded-full border border-gray-200 shadow-inner"></p>
+            </div>
+            <nav class="flex flex-wrap gap-2 md:gap-4 font-semibold text-gray-700">
+                <button id="inventory-link" data-view-id="inventory-view" class="px-6 py-3 rounded-full hover:bg-indigo-500 hover:text-white transition-colors duration-200 transform hover:-translate-y-1 shadow-lg">
+                    <i class="fas fa-boxes mr-2"></i>Inventory
+                </button>
+                <button id="stock-in-link" data-view-id="stock-in-view" class="px-6 py-3 rounded-full hover:bg-indigo-500 hover:text-white transition-colors duration-200 transform hover:-translate-y-1 shadow-lg">
+                    <i class="fas fa-arrow-alt-circle-down mr-2"></i>Stock In
+                </button>
+                <button id="stock-out-link" data-view-id="stock-out-view" class="px-6 py-3 rounded-full hover:bg-indigo-500 hover:text-white transition-colors duration-200 transform hover:-translate-y-1 shadow-lg">
+                    <i class="fas fa-arrow-alt-circle-up mr-2"></i>Stock Out
+                </button>
+                <button id="transactions-link" data-view-id="transactions-view" class="px-6 py-3 rounded-full hover:bg-indigo-500 hover:text-white transition-colors duration-200 transform hover:-translate-y-1 shadow-lg">
+                    <i class="fas fa-history mr-2"></i>Transactions
+                </button>
+            </nav>
+            <div id="message-box" class="hidden"></div>
+        </header>
 
-    <!-- Header and Navigation -->
-    <header class="w-full max-w-4xl text-center py-6">
-        <div class="flex items-center justify-center mb-4">
-            <h1 class="text-4xl font-extrabold text-gray-800">DESE Electronics Inventory Management</h1>
-        </div>
-        <p class="text-gray-500 mt-2" id="user-id-display">Connecting to database...</p>
-        <div class="flex justify-center space-x-4 mt-6">
-            <button id="stock-out-btn" class="px-6 py-2 font-semibold rounded-full shadow-lg transition-colors duration-200">
-                Stock Out
-            </button>
-            <button id="stock-in-btn" class="px-6 py-2 font-semibold rounded-full shadow-lg transition-colors duration-200">
-                Stock In
-            </button>
-            <button id="view-inventory-btn" class="px-6 py-2 font-semibold rounded-full shadow-lg transition-colors duration-200">
-                Current Inventory
-            </button>
-            <button id="view-transactions-btn" class="px-6 py-2 font-semibold rounded-full shadow-lg transition-colors duration-200">
-                Transaction History
-            </button>
-        </div>
-    </header>
-
-    <!-- Main Views Container -->
-    <main class="w-full max-w-4xl bg-white rounded-2xl shadow-xl p-8 mt-6">
-
-        <!-- Stock Out View -->
-        <section id="stock-out-view" class="space-y-6">
-            <h2 class="text-3xl font-bold text-gray-800 text-center mb-4">Stock Out</h2>
-            <p class="text-center text-sm text-gray-500">
-                Manually enter item details to remove from stock.
-            </p>
-            <form id="stock-out-form" class="space-y-4">
-                <input type="text" id="stock-out-student-name" placeholder="Student Name" class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <div id="student-autofill-message" class="w-full text-center text-sm h-4"></div>
-                <input type="text" id="stock-out-sr-number" placeholder="SR Number" disabled class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200 bg-gray-100 cursor-not-allowed">
-                <input type="text" id="stock-out-item-name" placeholder="Item Name" class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <input type="text" id="stock-out-part-number" placeholder="Part Number" readonly class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200 bg-gray-100 cursor-not-allowed">
-                <input type="text" id="stock-out-package" placeholder="Package" readonly class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200 bg-gray-100 cursor-not-allowed">
-                <div id="autofill-message-stock-out" class="w-full text-center text-sm h-4"></div>
-                <!-- New element to show suggestions -->
-                <div id="item-suggestions" class="w-full space-y-2 mt-4 hidden"></div>
-                <input type="number" id="stock-out-quantity" placeholder="Quantity to remove" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <button type="submit" class="w-full px-6 py-3 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors duration-200 shadow-lg">Remove from Stock</button>
-            </form>
-            <div id="message-box-stock-out" class="w-full h-12"></div>
-        </section>
+        <!-- Inventory View -->
+        <main id="inventory-view" class="app-view">
+            <div class="bg-white rounded-2xl shadow-xl p-6">
+                <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+                    <h2 class="text-2xl md:text-3xl font-bold text-gray-900">Current Inventory</h2>
+                    <div class="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                        <input type="text" id="search-input" placeholder="Search inventory..." class="flex-grow md:flex-grow-0 px-4 py-2 rounded-full border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors duration-200 shadow-inner glow-focus">
+                        <label class="px-4 py-2 bg-blue-500 text-white font-semibold rounded-full shadow-md hover:bg-blue-600 transition-colors duration-200 cursor-pointer text-center flex items-center justify-center space-x-2">
+                            <i class="fas fa-file-import"></i>
+                            <span>Import CSV</span>
+                            <input type="file" id="import-csv-input" accept=".csv" class="hidden">
+                        </label>
+                        <button id="export-inventory-btn" class="px-4 py-2 bg-green-500 text-white font-semibold rounded-full shadow-md hover:bg-green-600 transition-colors duration-200 flex items-center justify-center space-x-2">
+                            <i class="fas fa-file-export"></i>
+                            <span>Export CSV</span>
+                        </button>
+                        <button id="clear-inventory-btn" class="px-4 py-2 bg-red-500 text-white font-semibold rounded-full shadow-md hover:bg-red-600 transition-colors duration-200 flex items-center justify-center space-x-2">
+                            <i class="fas fa-trash-alt"></i>
+                            <span>Clear Inventory</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="message-box-import" class="mb-4"></div>
+                <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-inner">
+                    <table class="min-w-full bg-white divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Item Name</th>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Part Number</th>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Package</th>
+                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Stock In</th>
+                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Stock Out</th>
+                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Quantity</th>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Updated</th>
+                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventory-list" class="divide-y divide-gray-200">
+                            <!-- Inventory items will be dynamically inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
 
         <!-- Stock In View -->
-        <section id="stock-in-view" class="space-y-6 hidden">
-            <h2 class="text-3xl font-bold text-gray-800 text-center mb-4">Stock In</h2>
-            <p class="text-center text-sm text-gray-500">
-                Add new items or update existing stock.
-            </p>
-            <form id="stock-in-form" class="space-y-4">
-                <input type="text" id="stock-in-item-name" placeholder="Item Name" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <input type="text" id="stock-in-part-number" placeholder="Part Number" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <input type="text" id="stock-in-package" placeholder="Package" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <input type="number" id="stock-in-quantity" placeholder="Quantity to add" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <button type="submit" class="w-full px-6 py-3 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition-colors duration-200 shadow-lg">Add to Stock</button>
-            </form>
-            <div id="message-box-stock-in" class="w-full h-12"></div>
-        </section>
-
-        <!-- Current Inventory View -->
-        <section id="inventory-view" class="space-y-6 hidden">
-            <h2 class="text-3xl font-bold text-gray-800 text-center mb-4">Current Inventory</h2>
-            <div class="flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4 mb-4">
-                <label for="csv-file-input" class="cursor-pointer px-6 py-2 bg-gray-500 text-white font-semibold rounded-full shadow-lg hover:bg-gray-600 transition-colors duration-200">
-                    Import from CSV
-                </label>
-                <input type="file" id="csv-file-input" accept=".csv" class="hidden">
-                <button id="export-inventory-btn" class="px-6 py-2 bg-teal-500 text-white font-semibold rounded-full shadow-lg hover:bg-teal-600 transition-colors duration-200">
-                    Export Inventory to CSV
-                </button>
-                <button id="clear-btn" class="px-6 py-2 bg-red-500 text-white font-semibold rounded-full shadow-lg hover:bg-red-600 transition-colors duration-200">
-                    Clear Inventory
-                </button>
-                <button id="confirm-clear-btn" class="px-6 py-2 bg-red-700 text-white font-semibold rounded-full shadow-lg hover:bg-red-800 transition-colors duration-200 hidden">
-                    Confirm Clear
-                </button>
+        <main id="stock-in-view" class="app-view hidden">
+            <div class="bg-white rounded-2xl shadow-xl p-6">
+                <h2 class="text-3xl font-bold text-gray-900 mb-6">Stock In Items</h2>
+                <div id="message-box-stock-in" class="mt-4"></div>
+                <form id="stock-in-form" class="space-y-4">
+                    <div>
+                        <label for="stock-in-item-name" class="block text-sm font-medium text-gray-700">Item Name</label>
+                        <input type="text" id="stock-in-item-name" name="item-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
+                    </div>
+                    <div>
+                        <label for="stock-in-part-number" class="block text-sm font-medium text-gray-700">Part Number</label>
+                        <input type="text" id="stock-in-part-number" name="part-number" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
+                    </div>
+                    <div>
+                        <label for="stock-in-package" class="block text-sm font-medium text-gray-700">Package</label>
+                        <input type="text" id="stock-in-package" name="package" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
+                    </div>
+                    <div>
+                        <label for="stock-in-quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
+                        <input type="number" id="stock-in-quantity" name="quantity" required min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
+                    </div>
+                    <button type="submit" class="w-full py-3 px-4 bg-indigo-600 text-white font-semibold rounded-full shadow-md hover:bg-indigo-700 transition-colors duration-200 transform hover:-translate-y-1">
+                        <i class="fas fa-plus-circle mr-2"></i>Add to Stock
+                    </button>
+                </form>
             </div>
-            <!-- New search bar for inventory -->
-            <input type="text" id="inventory-search" placeholder="Search items with stock available..." class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-            <div class="overflow-x-auto rounded-lg shadow-inner">
-                <table class="min-w-full bg-white rounded-lg border-collapse">
-                    <thead class="bg-gray-200 text-gray-700">
-                        <tr>
-                            <th class="p-4 text-left font-semibold">Item Name</th>
-                            <th class="p-4 text-left font-semibold">Part Number</th>
-                            <th class="p-4 text-left font-semibold">Package</th>
-                            <th class="p-4 text-center font-semibold">Stock In</th>
-                            <th class="p-4 text-center font-semibold">Stock Out</th>
-                            <th class="p-4 text-center font-semibold">Available Stock</th>
-                            <th class="p-4 text-left font-semibold">Last Updated</th>
-                            <th class="p-4 text-center font-semibold">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="inventory-list" class="divide-y divide-gray-200">
-                        <!-- Inventory rows will be injected here by JavaScript -->
-                    </tbody>
-                </table>
-            </div>
-        </section>
+        </main>
 
-        <!-- Edit Item View -->
-        <section id="edit-view" class="space-y-6 hidden">
-            <h2 class="text-3xl font-bold text-gray-800 text-center mb-4">Edit Item</h2>
-            <p class="text-center text-sm text-gray-500">
-                Modify item details and quantity.
-            </p>
-            <form id="edit-form" class="space-y-4">
-                <input type="text" id="edit-item-name" placeholder="Item Name" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <input type="text" id="edit-part-number" placeholder="Part Number" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <input type="text" id="edit-package" placeholder="Package" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <input type="number" id="edit-quantity" placeholder="Available Quantity" required class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-200">
-                <div class="flex space-x-4">
-                    <button type="submit" class="w-full px-6 py-3 rounded-xl bg-green-600 text-white font-semibold hover:bg-green-700 transition-colors duration-200 shadow-lg">Save Changes</button>
-                    <button type="button" id="cancel-edit-btn" class="w-full px-6 py-3 rounded-xl bg-gray-500 text-white font-semibold hover:bg-gray-600 transition-colors duration-200 shadow-lg">Cancel</button>
+        <!-- Stock Out View -->
+        <main id="stock-out-view" class="app-view hidden">
+            <div class="bg-white rounded-2xl shadow-xl p-6">
+                <h2 class="text-3xl font-bold text-gray-900 mb-6">Stock Out Items</h2>
+                <div id="message-box-stock-out" class="mt-4"></div>
+                <form id="stock-out-form" class="space-y-4">
+                    <div>
+                        <label for="stock-out-student-name" class="block text-sm font-medium text-gray-700">Student Name</label>
+                        <input type="text" id="stock-out-student-name" name="student-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
+                    </div>
+                    <div>
+                        <label for="stock-out-sr-number" class="block text-sm font-medium text-gray-700">SR Number</label>
+                        <input type="text" id="stock-out-sr-number" name="sr-number" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 bg-gray-100 cursor-not-allowed">
+                        <p id="student-autofill-message" class="mt-2 text-sm text-gray-500"></p>
+                    </div>
+                    <div>
+                        <label for="stock-out-item-name" class="block text-sm font-medium text-gray-700">Item Name</label>
+                        <input type="text" id="stock-out-item-name" name="item-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
+                        <div id="item-suggestions" class="bg-white border border-gray-300 rounded-lg mt-2 shadow-lg max-h-48 overflow-y-auto hidden"></div>
+                        <p id="autofill-message-stock-out" class="mt-2 text-sm text-gray-500"></p>
+                    </div>
+                    <div>
+                        <label for="stock-out-part-number" class="block text-sm font-medium text-gray-700">Part Number</label>
+                        <input type="text" id="stock-out-part-number" name="part-number" required readonly class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 bg-gray-100 cursor-not-allowed">
+                    </div>
+                    <div>
+                        <label for="stock-out-package" class="block text-sm font-medium text-gray-700">Package</label>
+                        <input type="text" id="stock-out-package" name="package" required readonly class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 bg-gray-100 cursor-not-allowed">
+                    </div>
+                    <div>
+                        <label for="stock-out-quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
+                        <input type="number" id="stock-out-quantity" name="quantity" required min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
+                    </div>
+                    <button type="submit" class="w-full py-3 px-4 bg-indigo-600 text-white font-semibold rounded-full shadow-md hover:bg-indigo-700 transition-colors duration-200 transform hover:-translate-y-1">
+                        <i class="fas fa-minus-circle mr-2"></i>Stock Out
+                    </button>
+                </form>
+            </div>
+        </main>
+        
+        <!-- Transactions View -->
+        <main id="transactions-view" class="app-view hidden">
+            <div class="bg-white rounded-2xl shadow-xl p-6">
+                <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+                    <h2 class="text-3xl font-bold text-gray-900">Transaction History</h2>
+                    <div class="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                        <input type="text" id="transaction-search-input" placeholder="Search transactions..." class="flex-grow md:flex-grow-0 px-4 py-2 rounded-full border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors duration-200 shadow-inner glow-focus">
+                        <button id="export-transactions-btn" class="px-4 py-2 bg-green-500 text-white font-semibold rounded-full shadow-md hover:bg-green-600 transition-colors duration-200 flex items-center justify-center space-x-2">
+                            <i class="fas fa-file-export"></i>
+                            <span>Export CSV</span>
+                        </button>
+                        <button id="clear-transactions-btn" class="px-4 py-2 bg-red-500 text-white font-semibold rounded-full shadow-md hover:bg-red-600 transition-colors duration-200 flex items-center justify-center space-x-2">
+                            <i class="fas fa-trash-alt"></i>
+                            <span>Clear Transactions</span>
+                        </button>
+                    </div>
                 </div>
-            </form>
-            <div id="message-box-edit" class="w-full h-12"></div>
-        </section>
-
-        <!-- Transaction History View -->
-        <section id="transactions-view" class="space-y-6 hidden">
-            <h2 class="text-3xl font-bold text-gray-800 text-center mb-4">Transaction History</h2>
-            <div class="flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4 mb-4">
-                <button id="export-transactions-btn" class="px-6 py-2 bg-teal-500 text-white font-semibold rounded-full shadow-lg hover:bg-teal-600 transition-colors duration-200">
-                    Export Transactions to CSV
-                </button>
-                <button id="clear-transactions-btn" class="px-6 py-2 bg-red-500 text-white font-semibold rounded-full shadow-lg hover:bg-red-600 transition-colors duration-200">
-                    Clear Transaction History
-                </button>
+                <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-inner">
+                    <table class="min-w-full bg-white divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Student Name</th>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">SR Number</th>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Item Name</th>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Part Number</th>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Package</th>
+                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Quantity</th>
+                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Timestamp</th>
+                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactions-list" class="divide-y divide-gray-200">
+                            <!-- Transactions will be dynamically inserted here -->
+                        </tbody>
+                    </table>
+                </div>
             </div>
-            <div class="overflow-x-auto rounded-lg shadow-inner">
-                <table class="min-w-full bg-white rounded-lg border-collapse">
-                    <thead class="bg-gray-200 text-gray-700">
-                        <tr>
-                            <th class="p-4 text-left font-semibold">Student Name</th>
-                            <th class="p-4 text-left font-semibold">SR Number</th>
-                            <th class="p-4 text-left font-semibold">Item Name</th>
-                            <th class="p-4 text-left font-semibold">Part Number</th>
-                            <th class="p-4 text-left font-semibold">Package</th>
-                            <th class="p-4 text-center font-semibold">Quantity</th>
-                            <th class="p-4 text-left font-semibold">Timestamp</th>
-                        </tr>
-                    </thead>
-                    <tbody id="transactions-list" class="divide-y divide-gray-200">
-                        <!-- Transaction history rows will be injected here by JavaScript -->
-                    </tbody>
-                </table>
-            </div>
-        </section>
-    </main>
+        </main>
 
-    <!-- Clear Transactions Confirmation Modal -->
-    <div id="clear-transactions-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden">
-        <div class="bg-white rounded-2xl shadow-xl p-8 max-w-sm mx-auto">
-            <h3 class="text-2xl font-bold text-gray-800 mb-4 text-center">Are you sure?</h3>
-            <p class="text-gray-600 text-center mb-6">This will permanently delete ALL transaction history. This action cannot be undone.</p>
-            <div class="flex justify-center space-x-4">
-                <button id="cancel-clear-transactions-btn" class="px-6 py-2 bg-gray-300 text-gray-800 font-semibold rounded-full hover:bg-gray-400 transition-colors duration-200">
-                    Cancel
-                </button>
-                <button id="confirm-clear-transactions-btn" class="px-6 py-2 bg-red-600 text-white font-semibold rounded-full hover:bg-red-700 transition-colors duration-200">
-                    Yes, Clear
-                </button>
+        <!-- Edit View -->
+        <main id="edit-view" class="app-view hidden">
+            <div class="bg-white rounded-2xl shadow-xl p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-3xl font-bold text-gray-900">Edit Item</h2>
+                    <button id="back-to-inventory" class="px-4 py-2 bg-gray-200 text-gray-700 font-semibold rounded-full shadow-md hover:bg-gray-300 transition-colors duration-200">
+                        <i class="fas fa-arrow-left mr-2"></i>Go Back
+                    </button>
+                </div>
+                <div id="message-box-edit" class="mt-4"></div>
+                <form id="edit-form" class="space-y-4">
+                    <div>
+                        <label for="edit-item-name" class="block text-sm font-medium text-gray-700">Item Name</label>
+                        <input type="text" id="edit-item-name" name="item-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500 glow-focus">
+                    </div>
+                    <div>
+                        <label for="edit-part-number" class="block text-sm font-medium text-gray-700">Part Number</label>
+                        <input type="text" id="edit-part-number" name="part-number" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500 glow-focus">
+                    </div>
+                    <div>
+                        <label for="edit-package" class="block text-sm font-medium text-gray-700">Package</label>
+                        <input type="text" id="edit-package" name="package" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500 glow-focus">
+                    </div>
+                    <div>
+                        <label for="edit-quantity" class="block text-sm font-medium text-gray-700">Total Quantity</label>
+                        <input type="number" id="edit-quantity" name="quantity" required min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500 glow-focus">
+                    </div>
+                    <button type="submit" class="w-full py-3 px-4 bg-yellow-500 text-white font-semibold rounded-full shadow-md hover:bg-yellow-600 transition-colors duration-200 transform hover:-translate-y-1">
+                        <i class="fas fa-save mr-2"></i>Save Changes
+                    </button>
+                </form>
+            </div>
+        </main>
+
+        <!-- Confirmation Modal -->
+        <div id="confirmation-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 hidden">
+            <div class="bg-white rounded-2xl shadow-lg p-8 max-w-sm mx-auto">
+                <p id="confirmation-message" class="text-center font-semibold mb-6"></p>
+                <div class="flex justify-center space-x-4">
+                    <button id="confirm-yes" class="px-6 py-2 bg-red-500 text-white font-bold rounded-full hover:bg-red-600 transition-colors duration-200">Yes</button>
+                    <button id="confirm-no" class="px-6 py-2 bg-gray-300 text-gray-800 font-bold rounded-full hover:bg-gray-400 transition-colors duration-200">No</button>
+                </div>
             </div>
         </div>
     </div>
