@@ -3,1105 +3,1219 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DESE Inventory System</title>
+    <title>DESE Electronics Inventory Management</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- PDF Generation Library (html2pdf.js) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
     <!-- Firebase Imports -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, onSnapshot, setDoc, updateDoc, increment, serverTimestamp, setLogLevel, getDoc, getDocs, deleteDoc, addDoc, writeBatch, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // Ensure getDocs and writeBatch are imported for the new clear functionality
+        import { getFirestore, collection, doc, onSnapshot, setDoc, updateDoc, increment, serverTimestamp, setLogLevel, getDoc, getDocs, deleteDoc, addDoc, writeBatch, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Global variables
         let app, auth, db, userId;
         let inventoryData = {};
         let transactionsData = [];
-        let studentSrMap = {};
-        let currentItemToEdit = null;
-
-        // Custom message box for UI feedback
-        function showMessage(message, type = 'info', messageBoxId = 'message-box') {
-            const messageBox = document.getElementById(messageBoxId);
-            if (!messageBox) return;
-
-            messageBox.textContent = message;
-            messageBox.className = `p-4 mt-4 rounded-lg text-center font-semibold transition-all duration-300 transform ${type === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white'} scale-100 opacity-100`;
-            setTimeout(() => {
-                messageBox.className = `p-4 mt-4 rounded-lg text-center font-semibold transition-all duration-300 transform ${type === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white'} scale-95 opacity-0`;
-            }, 3000);
-        }
-
-        // Custom confirmation modal
-        function showConfirmationModal(message, onConfirm) {
-            const modal = document.getElementById('confirmation-modal');
-            const messageText = document.getElementById('confirmation-message');
-            const confirmBtn = document.getElementById('confirm-yes');
-            const cancelBtn = document.getElementById('confirm-no');
-
-            messageText.textContent = message;
-            modal.classList.remove('hidden');
-
-            const handleConfirm = () => {
-                modal.classList.add('hidden');
-                onConfirm();
-                confirmBtn.removeEventListener('click', handleConfirm);
-                cancelBtn.removeEventListener('click', handleCancel);
-            };
-
-            const handleCancel = () => {
-                modal.classList.add('hidden');
-                confirmBtn.removeEventListener('click', handleConfirm);
-                cancelBtn.removeEventListener('click', handleCancel);
-            };
-
-            confirmBtn.addEventListener('click', handleConfirm);
-            cancelBtn.addEventListener('click', handleCancel);
-        }
+        let studentSrNos = ['1234', '5678', '9012', '3456']; // Mock SR numbers for quick testing
         
-        // Function to switch between different views
-        function switchView(viewId) {
-            document.querySelectorAll('.app-view').forEach(view => {
-                view.classList.add('hidden');
-            });
-            document.getElementById(viewId).classList.remove('hidden');
+        // --- Utility Functions ---
 
-            // Update active navigation link styling
-            document.querySelectorAll('nav button').forEach(button => {
-                button.classList.remove('bg-indigo-700', 'text-white');
-            });
-            const activeLink = document.querySelector(`[data-view-id="${viewId}"]`);
-            if (activeLink) {
-                activeLink.classList.add('bg-indigo-700', 'text-white');
-            }
-        }
-
+        /**
+         * Initializes Firebase and authenticates the user.
+         */
         async function initializeFirebase() {
             try {
-                setLogLevel('debug');
-                
-                // Use the Firebase config provided by the Canvas environment
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-                const firebaseConfigFromCanvas = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-
-                const firebaseConfig = firebaseConfigFromCanvas || {
-                    apiKey: "AIzaSyCKLZ3BWAl0Z48H0dnprdtn2cTQ7jKlTOg",
-                    authDomain: "deseinventory.firebaseapp.com",
-                    projectId: "deseinventory",
-                    storageBucket: "deseinventory.firebasestorage.app",
-                    messagingSenderId: "765936216501",
-                    appId: "1:765936216501:web:972c9f9355ca638d81d1fc",
-                    measurementId: "G-M2STNJYRP9"
-                };
-
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
                 app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
                 db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('Debug');
 
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                
                 if (initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
                 } else {
                     await signInAnonymously(auth);
                 }
-                
-                const userId = auth.currentUser?.uid || crypto.randomUUID();
-                document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
-                
-                startRealtimeListeners(appId);
-                showMessage("Database connected successfully!", "success");
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        console.log("Authenticated with UID:", userId);
+                        // Start listening to data once authenticated
+                        setupDataListeners();
+                        document.getElementById('current-user-id').textContent = userId;
+                    } else {
+                        console.log("No user is signed in.");
+                        userId = null;
+                        document.getElementById('current-user-id').textContent = 'Not Authenticated';
+                    }
+                });
+
             } catch (error) {
-                console.error("Firebase initialization failed:", error);
-                showMessage("Failed to connect to the database. Check the console for errors.", "error");
+                console.error("Error during Firebase initialization or sign-in:", error);
+                document.getElementById('app-status').textContent = 'Error initializing Firebase. Check console.';
             }
         }
 
-        // Renders the inventory table based on the provided data
-        function renderInventoryTable(data) {
-            const inventoryList = document.getElementById('inventory-list');
-            inventoryList.innerHTML = '';
-            
-            if (data.length === 0) {
-                inventoryList.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-gray-500">No matching items found.</td></tr>';
-                return;
-            }
-
-            data.forEach(item => {
-                const row = document.createElement('tr');
-                row.className = 'border-b border-gray-200 hover:bg-gray-50 transition-colors duration-200';
-                row.innerHTML = `
-                    <td class="p-4">${item.name || 'N/A'}</td>
-                    <td class="p-4">${item.partNumber || 'N/A'}</td>
-                    <td class="p-4">${item.package || 'N/A'}</td>
-                    <td class="p-4 text-center font-bold text-green-600">${item.stockIn || 0}</td>
-                    <td class="p-4 text-center font-bold text-red-600">${item.stockOut || 0}</td>
-                    <td class="p-4 text-center font-bold text-indigo-700">${item.totalQuantity || 0}</td>
-                    <td class="p-4 text-sm text-gray-500">${item.lastUpdated?.toDate().toLocaleString() || 'N/A'}</td>
-                    <td class="p-4 text-center">
-                        <button class="edit-btn px-4 py-2 bg-yellow-500 text-white font-semibold rounded-full shadow-md hover:bg-yellow-600 transition-colors duration-200" data-item-id="${item.barcode}"><i class="fas fa-edit mr-2"></i>Edit</button>
-                    </td>
-                `;
-                inventoryList.appendChild(row);
-            });
-
-            document.querySelectorAll('.edit-btn').forEach(button => {
-                button.addEventListener('click', (event) => {
-                    const itemId = event.target.dataset.itemId;
-                    const item = inventoryData[itemId];
-                    if (item) {
-                        currentItemToEdit = item;
-                        populateEditForm(item);
-                        switchView('edit-view');
-                    }
-                });
-            });
-        }
-
-        function populateEditForm(item) {
-            document.getElementById('edit-item-name').value = item.name || '';
-            document.getElementById('edit-part-number').value = item.partNumber || '';
-            document.getElementById('edit-package').value = item.package || '';
-            document.getElementById('edit-quantity').value = item.totalQuantity || 0;
-            document.getElementById('edit-item-name').focus();
-        }
-
-        async function handleEditForm(event) {
-            event.preventDefault();
-            if (!currentItemToEdit) {
-                showMessage("No item selected for editing.", "error", 'message-box-edit');
-                return;
-            }
-
-            const newName = document.getElementById('edit-item-name').value.trim();
-            const newPartNumber = document.getElementById('edit-part-number').value.trim();
-            const newPackage = document.getElementById('edit-package').value.trim();
-            const newQuantity = parseInt(document.getElementById('edit-quantity').value.trim(), 10);
-            
-            if (!newName || !newPartNumber || !newPackage || isNaN(newQuantity) || newQuantity < 0) {
-                showMessage("Invalid input. Please fill out all fields correctly.", "error", 'message-box-edit');
-                return;
-            }
-
-            if (!db || !auth.currentUser) {
-                showMessage("Database not connected or user not authenticated. Please refresh the page.", "error", 'message-box-edit');
-                return;
-            }
-
+        /**
+         * Sets up real-time listeners for Inventory and Transactions.
+         */
+        function setupDataListeners() {
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const oldBarcode = currentItemToEdit.barcode;
-            const newBarcode = `${newName.replace(/\s/g, '').toLowerCase()}-${newPartNumber.replace(/\s/g, '').toLowerCase()}-${newPackage.replace(/\s/g, '').toLowerCase()}`;
+            const inventoryCollectionPath = `artifacts/${appId}/public/data/inventory`;
+            const transactionsCollectionPath = `artifacts/${appId}/public/data/transactions`;
 
-            try {
-                if (oldBarcode !== newBarcode) {
-                    const newRef = doc(db, `artifacts/${appId}/public/data/inventory`, newBarcode);
-                    await setDoc(newRef, {
-                        ...currentItemToEdit,
-                        barcode: newBarcode,
-                        name: newName,
-                        partNumber: newPartNumber,
-                        package: newPackage,
-                        totalQuantity: newQuantity,
-                        lastUpdated: serverTimestamp()
-                    });
-                    await deleteDoc(doc(db, `artifacts/${appId}/public/data/inventory`, oldBarcode));
-                } else {
-                    const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, oldBarcode);
-                    await updateDoc(itemRef, {
-                        name: newName,
-                        partNumber: newPartNumber,
-                        package: newPackage,
-                        totalQuantity: newQuantity,
-                        lastUpdated: serverTimestamp()
-                    });
-                }
-
-                showMessage("Item updated successfully!", "success", 'message-box-edit');
-                currentItemToEdit = null;
-                document.getElementById('edit-form').reset();
-                switchView('inventory-view');
-            } catch (e) {
-                console.error("Error updating item:", e);
-                showMessage(`Error updating item. Check console for details.`, "error", 'message-box-edit');
-            }
-        }
-        
-        // Listen for real-time inventory and transaction updates
-        function startRealtimeListeners(appId) {
-            if (!db || !appId) {
-                console.error("Database or App ID not available for listeners.");
-                return;
-            }
-            const inventoryCollectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
-            onSnapshot(inventoryCollectionRef, (querySnapshot) => {
+            // Inventory Listener
+            onSnapshot(collection(db, inventoryCollectionPath), (snapshot) => {
                 inventoryData = {};
-                querySnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    inventoryData[data.barcode] = data;
+                snapshot.forEach(doc => {
+                    inventoryData[doc.id] = { id: doc.id, ...doc.data() };
                 });
-                renderInventoryTable(Object.values(inventoryData));
+                console.log("Inventory Updated:", Object.values(inventoryData).length, "items");
+                renderInventory();
             }, (error) => {
-                console.error("Failed to fetch real-time inventory updates:", error);
-                showMessage("Failed to sync inventory. Please refresh.", "error");
+                console.error("Error listening to inventory:", error);
             });
 
-            const transactionsCollectionRef = collection(db, `artifacts/${appId}/public/data/transactions`);
-            onSnapshot(transactionsCollectionRef, (querySnapshot) => {
+            // Transactions Listener
+            onSnapshot(query(collection(db, transactionsCollectionPath)), (snapshot) => {
                 transactionsData = [];
-                studentSrMap = {}; // Reset the map
-                querySnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    transactionsData.push({id: doc.id, ...data});
-                    
-                    if (data.type === 'out' && data.studentName) {
-                        studentSrMap[data.studentName.toLowerCase()] = data.srNumber;
-                    }
+                snapshot.forEach(doc => {
+                    transactionsData.push({ id: doc.id, ...doc.data() });
                 });
-                renderTransactionsTable();
+                // Sort by timestamp descending
+                transactionsData.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
+                console.log("Transactions Updated:", transactionsData.length, "records");
+                renderTransactions();
             }, (error) => {
-                console.error("Failed to fetch real-time transaction updates:", error);
-                showMessage("Failed to sync transactions. Please refresh.", "error");
+                console.error("Error listening to transactions:", error);
             });
         }
-        
-        // Render the transactions table
-        function renderTransactionsTable(dataToRender = transactionsData) {
-            const transactionsList = document.getElementById('transactions-list');
-            transactionsList.innerHTML = '';
-            
-            const sortedTransactions = dataToRender.filter(t => t.type === 'out').sort((a, b) => b.timestamp - a.timestamp);
-            
-            if (sortedTransactions.length === 0) {
-                transactionsList.innerHTML = '<tr><td colspan="9" class="text-center p-4 text-gray-500">No matching transactions found.</td></tr>';
+
+        /**
+         * Renders the current inventory items in the table.
+         */
+        function renderInventory() {
+            const inventoryBody = document.getElementById('inventory-table-body');
+            if (!inventoryBody) return;
+
+            inventoryBody.innerHTML = '';
+            const items = Object.values(inventoryData).filter(item => item.name && item.partNumber); // Basic check for valid data
+
+            if (items.length === 0) {
+                inventoryBody.innerHTML = '<tr><td colspan="7" class="p-4 text-center text-gray-500">No inventory items found. Add a new item to get started.</td></tr>';
                 return;
             }
 
-            sortedTransactions.forEach(transaction => {
-                const isReturned = transaction.isReturned || false;
-                const rowClass = isReturned ? 'bg-green-50/50' : 'bg-red-50/50';
-                const buttonClass = isReturned ? 'opacity-50 cursor-not-allowed' : '';
-                const buttonDisabled = isReturned ? 'disabled' : '';
-
+            items.forEach(item => {
                 const row = document.createElement('tr');
-                row.className = `border-b border-gray-200 ${rowClass} hover:bg-gray-50 transition-colors duration-200`;
+                row.className = 'border-b hover:bg-yellow-50';
+                
+                // Format cost per unit for display
+                const costDisplay = item.costPerUnit ? `₹${item.costPerUnit.toFixed(2)}` : 'FREE';
+
                 row.innerHTML = `
-                    <td class="p-4">${transaction.studentName || 'N/A'}</td>
-                    <td class="p-4">${transaction.srNumber || 'N/A'}</td>
-                    <td class="p-4">${transaction.name || 'N/A'}</td>
-                    <td class="p-4">${transaction.partNumber || 'N/A'}</td>
-                    <td class="p-4">${transaction.package || 'N/A'}</td>
-                    <td class="p-4 text-center font-bold">${transaction.quantity || 0}</td>
-                    <td class="p-4 text-sm text-gray-500">${transaction.timestamp?.toDate().toLocaleString() || 'N/A'}</td>
-                    <td class="p-4 text-center font-bold">
-                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${isReturned ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}">${isReturned ? 'Returned' : 'Pending'}</span>
-                    </td>
-                    <td class="p-4 text-center">
-                        <button onclick="returnItem('${transaction.id}')" class="px-4 py-2 bg-purple-500 text-white font-semibold rounded-full shadow-md hover:bg-purple-600 transition-colors duration-200 ${buttonClass}" ${buttonDisabled}><i class="fas fa-undo mr-2"></i>Return</button>
+                    <td class="p-3 text-sm font-medium text-gray-900">${item.name}</td>
+                    <td class="p-3 text-sm text-gray-500">${item.partNumber}</td>
+                    <td class="p-3 text-sm text-gray-500">${item.package}</td>
+                    <td class="p-3 text-sm font-bold text-gray-700">${item.quantity || 0}</td>
+                    <td class="p-3 text-sm font-semibold text-blue-600">${costDisplay}</td>
+                    <td class="p-3 text-sm text-gray-500">${item.maxQuantity || 'N/A'}</td>
+                    <td class="p-3 text-sm">
+                        <button onclick="openTransactionModal('${item.id}', 'Issue')" class="text-red-500 hover:text-red-700 font-medium mr-2">Issue</button>
+                        <button onclick="openTransactionModal('${item.id}', 'Receive')" class="text-green-500 hover:text-green-700 font-medium mr-2">Receive</button>
+                        <button onclick="openEditModal('${item.id}')" class="text-yellow-600 hover:text-yellow-800 font-medium">Edit</button>
                     </td>
                 `;
-                transactionsList.appendChild(row);
+                inventoryBody.appendChild(row);
             });
         }
-        
-        // --- NEW RETURN LOGIC ---
-        async function returnItem(transactionId) {
-            if (!db || !auth.currentUser) {
-                showMessage("Database not connected or user not authenticated. Please refresh the page.", "error");
+
+        /**
+         * Renders the transaction history.
+         */
+        function renderTransactions() {
+            const transactionBody = document.getElementById('transaction-history-body');
+            if (!transactionBody) return;
+
+            transactionBody.innerHTML = '';
+            if (transactionsData.length === 0) {
+                transactionBody.innerHTML = '<tr><td colspan="7" class="p-4 text-center text-gray-500">No transaction records found.</td></tr>';
                 return;
             }
 
+            transactionsData.forEach(tx => {
+                const item = inventoryData[tx.itemId] || { name: 'Unknown Item', partNumber: 'N/A' };
+                const date = tx.timestamp ? new Date(tx.timestamp.toMillis()).toLocaleString() : 'N/A';
+                
+                let typeColor, statusText;
+                let issuedQuantity = tx.quantity || 0;
+                let returnedQuantity = tx.returnedQuantity || 0;
+                let outstandingQuantity = issuedQuantity - returnedQuantity;
+
+                if (tx.type === 'Issue') {
+                    if (outstandingQuantity === 0 && tx.isReturned === true) {
+                        statusText = 'Returned (Full)';
+                        typeColor = 'bg-gray-200 text-gray-800';
+                    } else if (outstandingQuantity > 0 && returnedQuantity > 0) {
+                        statusText = 'Partial Return';
+                        typeColor = 'bg-yellow-100 text-yellow-800';
+                    } else if (outstandingQuantity === issuedQuantity) {
+                        statusText = 'Issued';
+                        typeColor = 'bg-red-100 text-red-800';
+                    } else {
+                        statusText = 'Issue Record';
+                        typeColor = 'bg-red-100 text-red-800';
+                    }
+                    // Add quantity details to status for clarity
+                    statusText += ` (${outstandingQuantity}/${issuedQuantity})`;
+                } else {
+                    // Receive transaction (Manual Stock Receive)
+                    statusText = 'Receive';
+                    typeColor = 'bg-green-100 text-green-800';
+                }
+
+                
+                let fineDisplay = 'N/A';
+                // Display the current fine calculated on the OUTSTANDING quantity, stored in tx.totalFine
+                if (tx.type === 'Issue' && typeof tx.totalFine === 'number') {
+                    // Strike through the fine if it's zero (full return), but show the amount (which is 0.00)
+                    fineDisplay = `<span class="${outstandingQuantity === 0 ? 'text-gray-500 line-through' : 'font-bold text-red-600'}">₹${tx.totalFine.toFixed(2)}</span>`;
+                }
+
+                const row = document.createElement('tr');
+                row.className = 'border-b hover:bg-gray-50';
+                
+                row.innerHTML = `
+                    <td class="p-3 text-sm font-medium text-gray-900">${item.name}</td>
+                    <td class="p-3 text-sm text-gray-500">${item.partNumber}</td>
+                    <td class="p-3 text-sm">
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${typeColor}">
+                            ${statusText}
+                        </span>
+                    </td>
+                    <td class="p-3 text-sm font-semibold">${tx.quantity}</td>
+                    <td class="p-3 text-sm text-gray-500">
+                        ${tx.studentSrNo ? 
+                            `${tx.studentName || 'Student'} (SR No: ${tx.studentSrNo})` 
+                            : (tx.receivedBy || 'N/A')}
+                    </td>
+                    <td class="p-3 text-sm text-gray-500">${date}</td>
+                    <td class="p-3 text-sm">${fineDisplay}</td>
+                    <td class="p-3 text-sm">
+                        ${tx.type === 'Issue' && outstandingQuantity > 0 ? 
+                            `<button onclick="printTransactionChallan('${tx.id}')" 
+                                     class="text-blue-600 hover:text-blue-800 font-medium disabled:text-gray-400"
+                                     title="Download Issue Challan (Current Fine)">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L10 11.586l2.293-2.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                    <path d="M10 2a1 1 0 011 1v7a1 1 0 11-2 0V3a1 1 0 011-1z" />
+                                </svg>
+                            </button>` 
+                            : 'N/A'}
+                    </td>
+                `;
+                transactionBody.appendChild(row);
+            });
+        }
+        
+        // --- Core Application Logic ---
+
+        /**
+         * Processes a return (full or partial) for a specific outstanding Issue transaction.
+         * The fine is recalculated based on the remaining outstanding quantity.
+         */
+        window.handleProcessReturn = async (issueTxId, quantityToReturnInput) => {
+            const tx = transactionsData.find(t => t.id === issueTxId);
+            const quantityToReturn = parseInt(quantityToReturnInput, 10);
+            
+            if (!tx || tx.type !== 'Issue') {
+                showMessage('Error: Invalid transaction selected for return.', 'error');
+                return;
+            }
+            if (isNaN(quantityToReturn) || quantityToReturn <= 0) {
+                 showMessage('Return failed: Quantity must be greater than zero.', 'error');
+                return;
+            }
+
+            const initialIssuedQuantity = tx.quantity || 0;
+            const alreadyReturned = tx.returnedQuantity || 0;
+            const outstandingQuantity = initialIssuedQuantity - alreadyReturned;
+
+            if (quantityToReturn > outstandingQuantity) {
+                showMessage(`Return failed: Cannot return ${quantityToReturn} units. Only ${outstandingQuantity} are outstanding.`, 'error');
+                return;
+            }
+
+            // Get references
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, tx.itemId);
+            const issueTxRef = doc(db, `artifacts/${appId}/public/data/transactions`, issueTxId);
 
-            try {
-                await runTransaction(db, async (transaction) => {
-                    const transactionRef = doc(db, `artifacts/${appId}/public/data/transactions`, transactionId);
-                    const transactionDoc = await transaction.get(transactionRef);
-
-                    if (!transactionDoc.exists()) {
-                        throw new Error("Transaction document not found.");
-                    }
-                    
-                    const transactionData = transactionDoc.data();
-                    if (transactionData.isReturned) {
-                        throw new Error("This item has already been returned.");
-                    }
-                    
-                    const itemBarcode = transactionData.barcode;
-                    const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, itemBarcode);
-                    const itemDoc = await transaction.get(itemRef);
-
-                    if (!itemDoc.exists()) {
-                        throw new Error("Corresponding inventory item not found.");
-                    }
-
-                    const quantityToReturn = transactionData.quantity;
-
-                    // Update inventory: increment quantity
-                    transaction.update(itemRef, {
-                        totalQuantity: increment(quantityToReturn),
-                        stockOut: increment(-quantityToReturn), // Decrease stock out count
-                        lastUpdated: serverTimestamp()
-                    });
-
-                    // Update transaction record: mark as returned
-                    transaction.update(transactionRef, {
-                        isReturned: true,
-                        returnedAt: serverTimestamp()
-                    });
-                });
-
-                showMessage("Item returned successfully!", "success");
-            } catch (e) {
-                console.error("Error during return transaction:", e);
-                showMessage(`Error returning item: ${e.message}`, "error");
-            }
-        }
-        // --- END OF NEW RETURN LOGIC ---
-
-        // --- NEW LOGIC FOR STUDENT NAME AUTO-FILL ---
-        function handleStudentNameInput(event) {
-            const typedName = event.target.value.trim().toLowerCase();
-            const srNumberInput = document.getElementById('stock-out-sr-number');
-            const studentMessage = document.getElementById('student-autofill-message');
-
-            if (typedName.length > 0) {
-                const existingSrNumber = studentSrMap[typedName];
-                if (existingSrNumber) {
-                    srNumberInput.value = existingSrNumber;
-                    srNumberInput.disabled = true;
-                    srNumberInput.classList.remove('bg-gray-100', 'cursor-not-allowed');
-                    srNumberInput.classList.add('bg-blue-100', 'cursor-default');
-                    studentMessage.textContent = 'SR Number auto-filled from history.';
-                    studentMessage.className = 'text-green-600 font-semibold';
-                } else {
-                    srNumberInput.value = '';
-                    srNumberInput.disabled = false;
-                    srNumberInput.classList.remove('bg-blue-100', 'cursor-default');
-                    srNumberInput.classList.add('bg-gray-50');
-                    studentMessage.textContent = 'New student. Please enter SR Number.';
-                    studentMessage.className = 'text-yellow-600 font-semibold';
-                }
-            } else {
-                srNumberInput.value = '';
-                srNumberInput.disabled = true;
-                srNumberInput.classList.remove('bg-blue-100', 'cursor-default');
-                srNumberInput.classList.add('bg-gray-100', 'cursor-not-allowed');
-                studentMessage.textContent = '';
-            }
-        }
-
-        // --- NEW LOGIC FOR STOCK-OUT FORM ---
-        function handleItemNameInput(event) {
-            const searchTerm = event.target.value.toLowerCase().trim();
-            const partNumberInput = document.getElementById('stock-out-part-number');
-            const packageInput = document.getElementById('stock-out-package');
-            const suggestionsContainer = document.getElementById('item-suggestions');
-            const messageBox = document.getElementById('autofill-message-stock-out');
-
-            partNumberInput.value = '';
-            packageInput.value = '';
-            suggestionsContainer.innerHTML = '';
-            suggestionsContainer.classList.add('hidden');
-            messageBox.textContent = '';
+            const batch = writeBatch(db);
             
-            if (searchTerm.length === 0) return;
+            // 1. Update Inventory Quantity (Receive)
+            batch.update(itemRef, { quantity: increment(quantityToReturn) });
 
-            const matches = Object.values(inventoryData).filter(item => 
-                (item.name && item.name.toLowerCase().includes(searchTerm)) ||
-                (item.partNumber && item.partNumber.toLowerCase().includes(searchTerm))
-            );
+            // 2. Update Original Issue Transaction
+            const newReturnedQuantity = alreadyReturned + quantityToReturn;
+            const newOutstandingQuantity = initialIssuedQuantity - newReturnedQuantity;
+
+            // Recalculate fine based on remaining outstanding quantity (This is the core logic change)
+            const costPerUnit = tx.costPerUnit || 0.00;
+            const newTotalFine = costPerUnit * newOutstandingQuantity;
             
-            if (matches.length === 1) {
-                const item = matches[0];
-                document.getElementById('stock-out-item-name').value = item.name || '';
-                partNumberInput.value = item.partNumber || '';
-                packageInput.value = item.package || '';
-                messageBox.textContent = 'Item found! Part number and package autofilled.';
-                messageBox.className = 'text-green-600 font-semibold';
-            } else if (matches.length > 1) {
-                messageBox.textContent = 'Multiple items found. Please select from the list.';
-                messageBox.className = 'text-yellow-600 font-semibold';
-                suggestionsContainer.classList.remove('hidden');
-                
-                matches.forEach(item => {
-                    const suggestionDiv = document.createElement('div');
-                    suggestionDiv.className = 'flex justify-between items-center p-3 border-b border-gray-200 hover:bg-gray-100 transition-colors duration-200 cursor-pointer rounded-xl';
-                    suggestionDiv.innerHTML = `
-                        <div>
-                            <p class="font-semibold">${item.name || 'N/A'}</p>
-                            <p class="text-sm text-gray-500">Part Number: ${item.partNumber || 'N/A'}</p>
-                            <p class="text-sm text-gray-500">Package: ${item.package || 'N/A'}</p>
-                        </div>
-                        <button type="button" class="select-btn px-4 py-2 bg-indigo-500 text-white font-semibold rounded-full hover:bg-indigo-600 transition-colors duration-200"
-                                data-item-name="${item.name}" data-part-number="${item.partNumber}" data-package="${item.package}">Select</button>
-                    `;
-                    suggestionsContainer.appendChild(suggestionDiv);
-                });
-                
-                document.querySelectorAll('.select-btn').forEach(btn => {
-                    btn.addEventListener('click', (e) => {
-                        const selectedItemName = e.target.dataset.itemName;
-                        const selectedPartNumber = e.target.dataset.partNumber;
-                        const selectedPackage = e.target.dataset.package;
+            const isFullReturn = newOutstandingQuantity === 0;
 
-                        document.getElementById('stock-out-item-name').value = selectedItemName;
-                        partNumberInput.value = selectedPartNumber;
-                        packageInput.value = selectedPackage;
-                        suggestionsContainer.classList.add('hidden');
-                        messageBox.textContent = 'Item selected. You can now proceed.';
-                        messageBox.className = 'text-green-600 font-semibold';
-                    });
-                });
-            } else {
-                messageBox.textContent = 'No item found with this name.';
-                messageBox.className = 'text-red-600 font-semibold';
-            }
-        }
-        // --- END OF NEW LOGIC ---
-
-        // General function to handle all stock updates (in and out)
-        async function updateInventory(name, studentName, srNumber, partNumber, packageValue, quantity, action, messageBoxId) {
-            if (!name || !partNumber || !packageValue || isNaN(quantity) || quantity <= 0) {
-                showMessage("Invalid item name, part number, package, or quantity.", "error", messageBoxId);
-                return;
-            }
-            if (!db || !auth.currentUser) {
-                showMessage("Database not connected or user not authenticated. Please refresh the page.", "error", messageBoxId);
-                return;
-            }
-            
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const barcode = `${name.replace(/\s/g, '').toLowerCase()}-${partNumber.replace(/\s/g, '').toLowerCase()}-${packageValue.replace(/\s/g, '').toLowerCase()}`;
-            const displayBarcode = "N/A";
-            const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, barcode);
-            
-            try {
-                const itemDoc = await getDoc(itemRef);
-                const currentQuantity = itemDoc.exists() ? itemDoc.data().totalQuantity : 0;
-                
-                if (action === 'out' && quantity > currentQuantity) {
-                    showMessage(`Error: Cannot stock out ${quantity} units. Only ${currentQuantity} are available.`, "error", messageBoxId);
-                    return;
-                }
-
-                const updateData = {
-                    totalQuantity: increment(action === 'in' ? quantity : -quantity),
-                    lastUpdated: serverTimestamp(),
-                    lastStockIn: action === 'in' ? serverTimestamp() : itemDoc.data()?.lastStockIn,
-                    lastStockOut: action === 'out' ? serverTimestamp() : itemDoc.data()?.lastStockOut,
-                    displayBarcode: displayBarcode
-                };
-
-                if (action === 'in') {
-                    updateData.stockIn = increment(quantity);
-                    if (name) updateData.name = name;
-                    if (partNumber) updateData.partNumber = partNumber;
-                    if (packageValue) updateData.package = packageValue;
-                } else {
-                    updateData.stockOut = increment(quantity);
-                    if (name) updateData.name = name;
-                    if (partNumber) updateData.partNumber = partNumber;
-                    if (packageValue) updateData.package = packageValue;
-                }
-
-                if (itemDoc.exists()) {
-                    await updateDoc(itemRef, updateData);
-                } else {
-                    const newDoc = {
-                        barcode: barcode,
-                        displayBarcode: displayBarcode,
-                        name: name,
-                        partNumber: partNumber,
-                        package: packageValue,
-                        totalQuantity: quantity,
-                        stockIn: action === 'in' ? quantity : 0,
-                        stockOut: action === 'out' ? quantity : 0,
-                        lastStockIn: action === 'in' ? serverTimestamp() : null,
-                        lastStockOut: action === 'out' ? serverTimestamp() : null,
-                        lastUpdated: serverTimestamp()
-                    };
-                    await setDoc(itemRef, newDoc);
-                }
-
-                const transactionDoc = {
-                    type: action,
-                    barcode: barcode,
-                    displayBarcode: displayBarcode,
-                    name: name,
-                    partNumber: partNumber,
-                    package: packageValue,
-                    quantity: quantity,
-                    timestamp: serverTimestamp(),
-                    userId: auth.currentUser.uid,
-                    studentName: action === 'out' ? (studentName || 'N/A') : 'N/A',
-                    srNumber: action === 'out' ? (srNumber || 'N/A') : 'N/A',
-                    isReturned: false // New field to track returns
-                };
-                const transactionsCollectionRef = collection(db, `artifacts/${appId}/public/data/transactions`);
-                await addDoc(transactionsCollectionRef, transactionDoc);
-
-                showMessage(`Stock ${action === 'in' ? 'In' : 'Out'} successful for: ${name}!`, 'success', messageBoxId);
-                
-            } catch (e) {
-                console.error("Error updating stock:", e);
-                showMessage(`Error updating stock. Check console for details.`, "error", messageBoxId);
-            }
-        }
-
-        async function handleStockInForm(event) {
-            event.preventDefault();
-            const itemName = document.getElementById('stock-in-item-name').value.trim();
-            const partNumber = document.getElementById('stock-in-part-number').value.trim();
-            const packageValue = document.getElementById('stock-in-package').value.trim();
-            const quantity = parseInt(document.getElementById('stock-in-quantity').value.trim(), 10);
-            
-            if (!itemName || !partNumber || !packageValue || quantity <= 0) {
-                showMessage("Please fill out all required fields correctly.", "error", 'message-box-stock-in');
-                return;
-            }
-
-            await updateInventory(itemName, null, null, partNumber, packageValue, quantity, 'in', 'message-box-stock-in');
-            document.getElementById('stock-in-form').reset();
-            document.getElementById('stock-in-item-name').focus(); 
-        }
-
-        async function handleStockOutForm(event) {
-            event.preventDefault();
-            const quantity = parseInt(document.getElementById('stock-out-quantity').value.trim(), 10);
-            const itemName = document.getElementById('stock-out-item-name').value.trim();
-            const studentName = document.getElementById('stock-out-student-name').value.trim();
-            const partNumber = document.getElementById('stock-out-part-number').value.trim();
-            const srNumber = document.getElementById('stock-out-sr-number').value.trim();
-            
-            const packageValue = document.getElementById('stock-out-package').value.trim();
-
-            if (itemName && partNumber && quantity > 0) {
-                await updateInventory(itemName, studentName, srNumber, partNumber, packageValue, quantity, 'out', 'message-box-stock-out');
-                document.getElementById('stock-out-form').reset();
-                document.getElementById('stock-out-student-name').focus();
-            } else {
-                showMessage("Please fill out item name, part number, and quantity correctly.", "error", 'message-box-stock-out');
-            }
-        }
-        
-        document.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && event.target.form?.id === 'stock-out-form') {
-                if (event.target.id === 'stock-out-student-name') {
-                    const srNumberInput = document.getElementById('stock-out-sr-number');
-                    if (srNumberInput.disabled) {
-                        event.preventDefault();
-                        document.getElementById('stock-out-item-name').focus();
-                        return;
-                    }
-                }
-                
-                const form = event.target.form;
-                const formFields = Array.from(form.elements).filter(el => el.tagName === 'INPUT');
-                const currentIndex = formFields.indexOf(event.target);
-                
-                if (currentIndex === formFields.length - 1) {
-                    return;
-                }
-                
-                event.preventDefault();
-                const nextIndex = currentIndex + 1;
-                if (nextIndex < formFields.length) {
-                    formFields[nextIndex].focus();
-                }
-            }
-        });
-        
-        // Function to export current inventory to CSV
-        function exportInventoryToCsv() {
-            if (Object.keys(inventoryData).length === 0) {
-                showMessage("No inventory data to export.", "error");
-                return;
-            }
-
-            const header = "Item Name,Part Number,Package,Stock In Count,Stock Out Count,Available Stock,Last Updated\n";
-            let csv = header;
-
-            Object.values(inventoryData).forEach(item => {
-                const lastUpdated = item.lastUpdated?.toDate().toLocaleString() || 'N/A';
-                const row = `"${item.name || 'N/A'}","${item.partNumber || 'N/A'}","${item.package || 'N/A'}",${item.stockIn || 0},${item.stockOut || 0},${item.totalQuantity || 0},"${lastUpdated}"\n`;
-                csv += row;
-            });
-
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            link.setAttribute("href", url);
-            const timestamp = new Date().toISOString().slice(0, 10);
-            link.setAttribute("download", `inventory-${timestamp}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            showMessage("Inventory data exported successfully!", "success");
-        }
-
-        // Function to export transaction history to CSV
-        function exportTransactionsToCsv() {
-            const stockOutTransactions = transactionsData.filter(t => t.type === 'out');
-            if (stockOutTransactions.length === 0) {
-                showMessage("No stock out transactions to export.", "error");
-                return;
-            }
-
-            const header = "Student Name,SR Number,Item Name,Part Number,Package,Quantity,Timestamp,Status\n";
-            let csv = header;
-
-            stockOutTransactions.forEach(transaction => {
-                const timestamp = transaction.timestamp?.toDate().toLocaleString() || 'N/A';
-                const status = transaction.isReturned ? 'Returned' : 'Pending';
-                const row = `"${transaction.studentName || 'N/A'}","${transaction.srNumber || 'N/A'}","${transaction.name || 'N/A'}","${transaction.partNumber || 'N/A'}","${transaction.package || 'N/A'}",${transaction.quantity},"${timestamp}","${status}"\n`;
-                csv += row;
-            });
-
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            link.setAttribute("href", url);
-            const timestamp = new Date().toISOString().slice(0, 10);
-            link.setAttribute("download", `transactions-${timestamp}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            showMessage("Transaction history exported successfully!", "success");
-        }
-
-        // Function to import data from a CSV file
-        function importFromCsv(event) {
-            const file = event.target.files[0];
-            if (!file) {
-                return;
-            }
-            const reader = new FileReader();
-            reader.onload = async function(e) {
-                const text = e.target.result;
-                const rows = text.split('\n');
-                if (rows.length <= 1) {
-                    showMessage("CSV file is empty or has no data rows.", "error");
-                    return;
-                }
-                const header = rows[0].split(',').map(h => h.trim().replace(/"/g, ''));
-                if (!db || !auth.currentUser) {
-                    showMessage("Database not connected. Please refresh.", "error");
-                    return;
-                }
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-                const batch = writeBatch(db);
-                const importMessageId = 'message-box-import';
-                let successCount = 0;
-                let errorCount = 0;
-
-                showMessage("Starting import...", "info", importMessageId);
-
-                for (let i = 1; i < rows.length; i++) {
-                    const row = rows[i].trim();
-                    if (!row) continue;
-
-                    const values = row.split(',').map(v => v.trim().replace(/"/g, ''));
-                    const item = {};
-                    header.forEach((key, index) => {
-                        item[key] = values[index];
-                    });
-                    
-                    const itemName = item['Item Name'] || '';
-                    const partNumber = item['Part Number'] || '';
-                    const packageValue = item['Package'] || '';
-                    const totalQuantity = parseInt(item['Available Stock'], 10);
-                    const stockIn = parseInt(item['Stock In Count'], 10) || 0;
-                    const stockOut = parseInt(item['Stock Out Count'], 10) || 0;
-
-                    if (!itemName || !partNumber || !packageValue || isNaN(totalQuantity)) {
-                        console.error("Skipping invalid row:", item);
-                        errorCount++;
-                        continue;
-                    }
-                    
-                    const barcode = `${itemName.replace(/\s/g, '').toLowerCase()}-${partNumber.replace(/\s/g, '').toLowerCase()}-${packageValue.replace(/\s/g, '').toLowerCase()}`;
-                    const itemRef = doc(db, `artifacts/${appId}/public/data/inventory`, barcode);
-
-                    batch.set(itemRef, {
-                        barcode: barcode,
-                        name: itemName,
-                        partNumber: partNumber,
-                        package: packageValue,
-                        totalQuantity: totalQuantity,
-                        stockIn: stockIn,
-                        stockOut: stockOut,
-                        lastUpdated: serverTimestamp()
-                    });
-                    successCount++;
-                }
-
-                try {
-                    await batch.commit();
-                    showMessage(`Import successful! ${successCount} items processed.`, "success", importMessageId);
-                } catch (e) {
-                    console.error("Batch write failed:", e);
-                    showMessage(`Import failed. ${successCount} items processed before the error. Check console.`, "error", importMessageId);
-                }
+            const issueUpdate = { 
+                returnedQuantity: newReturnedQuantity, 
+                totalFine: newTotalFine, // Fine is calculated on the remaining outstanding quantity
+                lastReturnTimestamp: serverTimestamp(),
             };
-            reader.readAsText(file);
-        }
-
-        // Function to delete all inventory items
-        async function clearInventory() {
-            if (!db || !auth.currentUser) {
-                showMessage("Database not connected or user not authenticated. Please refresh.", "error");
-                return;
+            
+            if (isFullReturn) {
+                 issueUpdate.isReturned = true; // Mark as fully closed/returned
+            } else {
+                 // Ensure isReturned is false if it's a partial return
+                 issueUpdate.isReturned = false;
             }
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const inventoryCollectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
-            showMessage("Clearing inventory...", "info");
+
+            batch.update(issueTxRef, issueUpdate);
             
             try {
-                const querySnapshot = await getDocs(inventoryCollectionRef);
-                if (querySnapshot.empty) {
-                    showMessage("Inventory is already empty. Nothing to clear.", "success");
+                await batch.commit();
+                showMessage(`Return successful. ${quantityToReturn} x ${tx.itemName} returned by ${tx.studentName}. Remaining fine for ${newOutstandingQuantity} units is ₹${newTotalFine.toFixed(2)}.`, 'success');
+                // Re-open the modal to refresh the outstanding list
+                openTransactionModal(tx.itemId, 'Receive');
+            } catch (error) {
+                console.error("Error processing return:", error);
+                showMessage(`Return failed: ${error.message}`, 'error');
+            }
+        };
+
+        /**
+         * Deletes all documents in the Inventory collection.
+         */
+        window.clearInventory = async () => {
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const collectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
+            
+            try {
+                const snapshot = await getDocs(query(collectionRef));
+                const batch = writeBatch(db);
+                
+                if (snapshot.empty) {
+                    showMessage('Inventory is already empty.', 'info');
                     return;
                 }
 
-                const batch = writeBatch(db);
-                querySnapshot.docs.forEach(doc => {
+                snapshot.forEach(doc => {
                     batch.delete(doc.ref);
                 });
-                await batch.commit();
-                showMessage("Inventory cleared successfully!", "success");
-            } catch (e) {
-                console.error("Error clearing inventory:", e);
-                showMessage("Failed to clear inventory. Check console for details.", "error");
-            }
-        }
 
-        // Function to delete all transaction history
-        async function clearTransactions() {
-            if (!db || !auth.currentUser) {
-                showMessage("Database not connected or user not authenticated. Please refresh.", "error");
-                return;
+                await batch.commit();
+                showMessage(`Successfully cleared ${snapshot.size} inventory items.`, 'success');
+            } catch (error) {
+                console.error("Error clearing inventory:", error);
+                showMessage(`Failed to clear inventory: ${error.message}`, 'error');
             }
+        };
+
+        /**
+         * Deletes all documents in the Transactions collection.
+         */
+        window.clearTransactions = async () => {
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const transactionsCollectionRef = collection(db, `artifacts/${appId}/public/data/transactions`);
-            showMessage("Clearing transaction history...", "info");
+            const collectionRef = collection(db, `artifacts/${appId}/public/data/transactions`);
 
             try {
-                const querySnapshot = await getDocs(transactionsCollectionRef);
-                if (querySnapshot.empty) {
-                    showMessage("Transaction history is already empty. Nothing to clear.", "success");
+                const snapshot = await getDocs(query(collectionRef));
+                const batch = writeBatch(db);
+
+                if (snapshot.empty) {
+                    showMessage('Transaction history is already empty.', 'info');
                     return;
                 }
 
-                const batch = writeBatch(db);
-                querySnapshot.docs.forEach(doc => {
+                snapshot.forEach(doc => {
                     batch.delete(doc.ref);
                 });
+
                 await batch.commit();
-                showMessage("Transaction history cleared successfully!", "success");
-            } catch (e) {
-                console.error("Error clearing transactions:", e);
-                showMessage("Failed to clear transaction history. Check console for details.", "error");
+                showMessage(`Successfully cleared ${snapshot.size} transaction records.`, 'success');
+            } catch (error) {
+                console.error("Error clearing transactions:", error);
+                showMessage(`Failed to clear transactions: ${error.message}`, 'error');
             }
-        }
+        };
 
-        function handleSearch(event) {
-            const searchTerm = event.target.value.toLowerCase().trim();
-            const filteredData = Object.values(inventoryData).filter(item => 
-                (item.name && item.name.toLowerCase().includes(searchTerm)) ||
-                (item.partNumber && item.partNumber.toLowerCase().includes(searchTerm)) ||
-                (item.package && item.package.toLowerCase().includes(searchTerm)) ||
-                (item.barcode && item.barcode.toLowerCase().includes(searchTerm))
-            );
-            renderInventoryTable(filteredData);
-        }
+        /**
+         * Handles the submission of a new item form.
+         */
+        window.handleAddItem = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const newItem = {
+                name: form['item-name'].value,
+                partNumber: form['part-number'].value,
+                package: form['package'].value,
+                quantity: parseInt(form['total-quantity'].value, 10) || 0,
+                costPerUnit: parseFloat(form['cost-per-unit'].value) || 0.00, // Cost per unit/fine
+                // maxQuantity field has been removed from the form and is no longer set here
+                createdBy: userId,
+                createdAt: serverTimestamp()
+            };
 
-        // New function to handle searching transactions
-        function handleTransactionSearch(event) {
-            const searchTerm = event.target.value.toLowerCase().trim();
-            const filteredData = transactionsData.filter(transaction => {
-                if (transaction.type !== 'out') return false;
-                const matchesStudent = transaction.studentName && transaction.studentName.toLowerCase().includes(searchTerm);
-                const matchesSrNumber = transaction.srNumber && transaction.srNumber.toLowerCase().includes(searchTerm);
-                const matchesItemName = transaction.name && transaction.name.toLowerCase().includes(searchTerm);
-                const matchesPartNumber = transaction.partNumber && transaction.partNumber.toLowerCase().includes(searchTerm);
-                const matchesPackage = transaction.package && transaction.package.toLowerCase().includes(searchTerm);
-                return matchesStudent || matchesSrNumber || matchesItemName || matchesPartNumber || matchesPackage;
-            });
-            renderTransactionsTable(filteredData);
-        }
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const collectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
 
-        document.addEventListener('DOMContentLoaded', () => {
-            initializeFirebase();
+            try {
+                await addDoc(collectionRef, newItem);
+                form.reset();
+                closeModal('add-item-modal');
+                showMessage('New item added successfully.', 'success');
+            } catch (error) {
+                console.error("Error adding item:", error);
+                showMessage(`Failed to add item. ${error.message}`, 'error');
+            }
+        };
 
-            // Setup event listeners
-            document.getElementById('inventory-link').addEventListener('click', () => switchView('inventory-view'));
-            document.getElementById('stock-in-link').addEventListener('click', () => switchView('stock-in-view'));
-            document.getElementById('stock-out-link').addEventListener('click', () => switchView('stock-out-view'));
-            document.getElementById('transactions-link').addEventListener('click', () => switchView('transactions-view'));
-            document.getElementById('back-to-inventory').addEventListener('click', () => switchView('inventory-view'));
-            document.getElementById('stock-in-form').addEventListener('submit', handleStockInForm);
-            document.getElementById('stock-out-form').addEventListener('submit', handleStockOutForm);
-            document.getElementById('edit-form').addEventListener('submit', handleEditForm);
-            document.getElementById('export-inventory-btn').addEventListener('click', exportInventoryToCsv);
-            document.getElementById('export-transactions-btn').addEventListener('click', exportTransactionsToCsv);
-            document.getElementById('import-csv-input').addEventListener('change', importFromCsv);
-            document.getElementById('search-input').addEventListener('input', handleSearch);
+        /**
+         * Handles the submission of the edit item form.
+         */
+        window.handleEditItem = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const itemId = form['edit-item-id'].value;
+            const itemRef = doc(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/inventory`, itemId);
+
+            const updatedItem = {
+                name: form['edit-item-name'].value,
+                partNumber: form['edit-part-number'].value,
+                package: form['edit-package'].value,
+                quantity: parseInt(form['edit-quantity'].value, 10) || 0,
+                costPerUnit: parseFloat(form['edit-cost-per-unit'].value) || 0.00, // Cost per unit/fine
+                maxQuantity: parseInt(form['edit-max-quantity'].value, 10) || null,
+            };
+
+            try {
+                await updateDoc(itemRef, updatedItem);
+                closeModal('edit-item-modal');
+                showMessage('Item updated successfully.', 'success');
+            } catch (error) {
+                console.error("Error updating item:", error);
+                showMessage(`Failed to update item. ${error.message}`, 'error');
+            }
+        };
+
+
+        /**
+         * Handles the submission of a transaction (Issue or Manual Receive).
+         */
+        window.handleTransaction = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const itemId = form['transaction-item-id'].value;
+            const itemRef = doc(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/inventory`, itemId);
             
-            // New clear buttons
-            document.getElementById('clear-inventory-btn').addEventListener('click', () => {
-                showConfirmationModal("Are you sure you want to clear ALL inventory data? This action cannot be undone.", clearInventory);
-            });
-            document.getElementById('clear-transactions-btn').addEventListener('click', () => {
-                showConfirmationModal("Are you sure you want to clear ALL transaction history? This action cannot be undone.", clearTransactions);
-            });
+            const itemDoc = await getDoc(itemRef);
+            if (!itemDoc.exists()) {
+                showMessage('Transaction failed: Item not found.', 'error');
+                return;
+            }
 
-            // New search listener for transactions
-            document.getElementById('transaction-search-input').addEventListener('input', handleTransactionSearch);
+            const currentItem = itemDoc.data();
+            const type = form['transaction-type'].value;
+            const quantityChange = parseInt(form['transaction-quantity'].value, 10);
+            const studentSrNo = form['student-sr-no']?.value;
+            const studentName = form['student-name']?.value;
+            const receivedBy = form['received-by']?.value;
 
-            // Autofill listeners
-            document.getElementById('stock-out-student-name').addEventListener('input', handleStudentNameInput);
-            document.getElementById('stock-out-item-name').addEventListener('input', handleItemNameInput);
-        });
+            if (isNaN(quantityChange) || quantityChange <= 0) {
+                 showMessage('Transaction failed: Quantity must be greater than zero.', 'error');
+                return;
+            }
+
+            const transactionData = {
+                itemId: itemId,
+                type: type,
+                quantity: quantityChange,
+                timestamp: serverTimestamp(),
+                processedBy: userId,
+                itemName: currentItem.name,
+                partNumber: currentItem.partNumber,
+                package: currentItem.package,
+            };
+
+            const batch = writeBatch(db);
+            let inventoryUpdate;
+
+            if (type === 'Issue') {
+                const newQuantity = currentItem.quantity - quantityChange;
+                if (newQuantity < 0) {
+                    showMessage('Issue failed: Insufficient stock in inventory.', 'error');
+                    return;
+                }
+                // Check if both Name and SR No. are present
+                if (!studentSrNo || !studentName) {
+                    showMessage('Issue failed: Student Name and SR No. are mandatory.', 'error');
+                    return;
+                }
+
+                // Calculate Fine
+                const costPerUnit = parseFloat(currentItem.costPerUnit) || 0.00;
+                const totalFine = costPerUnit * quantityChange;
+
+                inventoryUpdate = { quantity: increment(-quantityChange) };
+                transactionData.studentSrNo = studentSrNo;
+                transactionData.studentName = studentName;
+                transactionData.costPerUnit = costPerUnit;
+                transactionData.totalFine = totalFine; // Initial fine based on issued quantity
+                transactionData.isReturned = false; // Mark as open/not returned initially
+                transactionData.returnedQuantity = 0; // NEW: Initialize returned quantity for tracking
+
+            } else { // Receive (Manual Receive, not linked to specific issue)
+                inventoryUpdate = { quantity: increment(quantityChange) };
+                transactionData.receivedBy = receivedBy || 'Stock Received';
+            }
+
+            // 1. Update Inventory Quantity
+            batch.update(itemRef, inventoryUpdate);
+
+            // 2. Add Transaction Record
+            const transactionsCollectionRef = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/transactions`);
+            const newTransactionRef = doc(transactionsCollectionRef);
+            batch.set(newTransactionRef, transactionData);
+
+            try {
+                await batch.commit();
+                showMessage(`${type} successful. Item: ${currentItem.name}, Quantity: ${quantityChange}`, 'success');
+                closeModal('transaction-modal');
+            } catch (error) {
+                console.error("Error processing transaction:", error);
+                showMessage(`Transaction failed: ${error.message}`, 'error');
+            }
+        };
         
-        // Expose functions to the global scope for event handlers in the HTML
-        window.returnItem = returnItem;
+        // --- PDF Challan Functions ---
+
+        /**
+         * Generates the HTML content for the Issue Challan PDF.
+         * @param {Object} tx - The transaction object.
+         * @returns {string} The HTML string for the challan.
+         */
+        function generateChallanHTML(tx) {
+            // Note: Use stored transaction data for the challan.
+            const date = tx.timestamp ? new Date(tx.timestamp.toMillis()).toLocaleString() : 'N/A';
+            const transactionId = tx.id;
+            const costPerUnit = parseFloat(tx.costPerUnit) || 0;
+            const issuedQuantity = tx.quantity || 0;
+            const outstandingQuantity = issuedQuantity - (tx.returnedQuantity || 0);
+            
+            // The displayed fine is the *current* fine based on the outstanding quantity
+            const totalFine = parseFloat(tx.totalFine) || 0; 
+            
+            const totalFineDisplay = totalFine.toFixed(2);
+            const costPerUnitDisplay = costPerUnit.toFixed(2);
+            
+            // This is the HTML that will be used by html2pdf.js to generate the PDF
+            return `
+                <div id="challan-document" style="padding: 24px; font-family: 'Inter', sans-serif; background-color: #ffffff; border: 1px solid #e5e7eb; max-width: 800px; margin: 0 auto; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+                    <style>
+                        /* Minimal styles for PDF consistency */
+                        @media print {
+                            body { margin: 0; padding: 0; }
+                            #challan-document { border: none; box-shadow: none; max-width: 100%; }
+                        }
+                        .header-main { font-size: 1.75rem; font-weight: 800; color: #1f2937; border-bottom: 3px solid #f59e0b; padding-bottom: 0.5rem; margin-bottom: 1.5rem; }
+                        .header-sub { font-size: 1rem; color: #6b7280; margin-top: 0.25rem; font-weight: 600; }
+                        .info-grid { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; }
+                        .info-box { background-color: #f9fafb; padding: 1rem; border-radius: 0.5rem; flex: 1 1 45%; border: 1px solid #e5e7eb; }
+                        .info-label { font-size: 0.75rem; color: #6b7280; margin-bottom: 0.25rem; font-weight: 500; text-transform: uppercase; }
+                        .info-value { font-size: 1rem; font-weight: 600; color: #1f2937; }
+                        .table-header { background-color: #fef3c7; color: #92400e; font-size: 0.75rem; font-weight: 700; padding: 0.75rem 1rem; text-align: left; border: 1px solid #fcd34d; }
+                        .table-cell { padding: 0.75rem 1rem; border-bottom: 1px solid #e5e7eb; font-size: 0.875rem; border-left: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb; }
+                        .total-row { background-color: #fffbeb; font-weight: 700; font-size: 1.1rem; color: #b45309; }
+                        .signature-block { border-top: 1px solid #9ca3af; padding-top: 0.5rem; margin-top: 2rem; width: 45%; text-align: center; font-size: 0.875rem; color: #4b5563; }
+                    </style>
+
+                    <!-- Header -->
+                    <div style="text-align: center; margin-bottom: 2rem;">
+                        <div class="header-main">DESE Electronics Issue Challan (Fine Slip)</div>
+                        <div class="header-sub">Record of Stock Issue and Payable Fine</div>
+                    </div>
+
+                    <!-- Recipient and Transaction Details -->
+                    <div class="info-grid">
+                        <div class="info-box">
+                            <div class="info-label">Issued To</div>
+                            <div class="info-value">${tx.studentName || 'N/A'}</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="info-label">Student Roll/SR No.</div>
+                            <div class="info-value">${tx.studentSrNo || 'N/A'}</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="info-label">Date of Issue</div>
+                            <div class="info-value">${date}</div>
+                        </div>
+                        <div class="info-box">
+                            <div class="info-label">Transaction ID</div>
+                            <div class="info-value" style="font-size: 0.75rem; word-break: break-all;">${transactionId}</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Items Table -->
+                    <h4 style="font-size: 1rem; font-weight: 600; color: #1f2937; margin-bottom: 0.5rem;">Issued Components:</h4>
+                    <table style="width: 100%; border-collapse: collapse; border-top: 1px solid #fcd34d;">
+                        <thead>
+                            <tr>
+                                <th class="table-header" style="width: 30%;">Item Name</th>
+                                <th class="table-header" style="width: 15%;">Issued Qty</th>
+                                <th class="table-header" style="width: 15%;">Outstanding Qty</th>
+                                <th class="table-header" style="width: 15%; text-align: right;">Unit Fine (₹)</th>
+                                <th class="table-header" style="width: 25%; text-align: right;">Current Payable Fine (₹)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td class="table-cell">${tx.itemName || 'N/A'}</td>
+                                <td class="table-cell">${issuedQuantity}</td>
+                                <td class="table-cell font-bold">${outstandingQuantity}</td>
+                                <td class="table-cell" style="text-align: right;">${costPerUnitDisplay}</td>
+                                <td class="table-cell" style="text-align: right; font-weight: 700; color: #dc2626;">${totalFineDisplay}</td>
+                            </tr>
+                            <tr class="total-row">
+                                <td class="table-cell" colspan="4" style="text-align: right; border: none; padding-top: 1rem; padding-bottom: 1rem;">TOTAL AMOUNT PAYABLE:</td>
+                                <td class="table-cell" style="text-align: right; border: none; padding-top: 1rem; padding-bottom: 1rem; color: #dc2626; font-size: 1.25rem;">₹${totalFineDisplay}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <!-- Signatures -->
+                    <div style="display: flex; justify-content: space-between; margin-top: 4rem;">
+                        <div class="signature-block">
+                            <div style="font-weight: 700; margin-bottom: 0.25rem;">_________________________</div>
+                            Student Signature<br>(${tx.studentName || 'N/A'})
+                        </div>
+                        <div class="signature-block">
+                            <div style="font-weight: 700; margin-bottom: 0.25rem;">_________________________</div>
+                            Inventory Manager<br>(${tx.processedBy || 'N/A'})
+                        </div>
+                    </div>
+
+                    <div style="text-align: center; margin-top: 3rem; font-size: 0.75rem; color: #9ca3af;">
+                        NOTE: This slip must be presented at the time of fee payment or component return. The Fine amount reflects the current outstanding quantity.
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * Fetches transaction details and triggers the PDF generation.
+         * @param {string} transactionId - The ID of the transaction to print.
+         */
+        window.printTransactionChallan = (transactionId) => {
+            const tx = transactionsData.find(t => t.id === transactionId);
+            
+            const outstanding = (tx.quantity || 0) - (tx.returnedQuantity || 0);
+
+            if (!tx || tx.type !== 'Issue' || outstanding <= 0) {
+                showMessage('Error: Challan can only be generated for active issue transactions with an outstanding balance.', 'error');
+                return;
+            }
+
+            const challanHtml = generateChallanHTML(tx);
+            const pdfContainer = document.getElementById('pdf-container');
+            pdfContainer.innerHTML = challanHtml; // Populate the container
+
+            const filename = `Issue_Challan_${tx.studentSrNo || 'Unknown'}_${tx.itemName.replace(/\s/g, '_')}_${tx.id.substring(0, 6)}.pdf`;
+            
+            // html2pdf options
+            const options = {
+                margin: 10,
+                filename: filename,
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2, logging: false, useCORS: true },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            };
+
+            // Generate the PDF from the populated container
+            html2pdf().set(options).from(document.getElementById('challan-document')).save().then(() => {
+                pdfContainer.innerHTML = ''; // Clean up
+                showMessage('Issue Challan downloaded successfully.', 'success');
+            }).catch(error => {
+                console.error('PDF Generation Failed:', error);
+                showMessage('Failed to generate PDF Challan.', 'error');
+            });
+        };
+        
+        // --- UI/Modal Management ---
+
+        /**
+         * Shows the general message container.
+         */
+        function showMessage(message, type) {
+            const messageEl = document.getElementById('message-box');
+            messageEl.textContent = message;
+            messageEl.className = 'p-3 rounded-md shadow-lg fixed top-4 right-4 z-50 transition-transform duration-300 transform translate-x-0';
+            
+            if (type === 'success') {
+                messageEl.classList.add('bg-green-500', 'text-white');
+            } else if (type === 'error') {
+                messageEl.classList.add('bg-red-500', 'text-white');
+            } else {
+                messageEl.classList.add('bg-blue-500', 'text-white');
+            }
+
+            setTimeout(() => {
+                messageEl.classList.remove('translate-x-0');
+                messageEl.classList.add('translate-x-full');
+            }, 5000);
+        }
+
+        /**
+         * Opens a modal by its ID.
+         */
+        window.openModal = (id) => {
+            document.getElementById(id).classList.remove('hidden');
+        };
+
+        /**
+         * Closes a modal by its ID.
+         */
+        window.closeModal = (id) => {
+            document.getElementById(id).classList.add('hidden');
+        };
+
+        /**
+         * Opens the generic confirmation modal and sets the callback action.
+         */
+        window.openConfirmationModal = (actionName, message, callback) => {
+            document.getElementById('confirmation-modal-title').textContent = `Confirm ${actionName}`;
+            document.getElementById('confirmation-modal-message').textContent = message;
+            
+            const confirmButton = document.getElementById('confirmation-modal-button');
+            confirmButton.textContent = `Confirm ${actionName.split(' ')[1]}`; // e.g., "Confirm Delete" or "Confirm Clear"
+            confirmButton.onclick = () => {
+                closeModal('confirmation-modal');
+                callback();
+            };
+
+            openModal('confirmation-modal');
+        };
+        
+        /**
+         * Opens the transaction modal and sets up the form based on type (Issue/Receive).
+         */
+        window.openTransactionModal = (itemId, type) => {
+            const item = inventoryData[itemId];
+            if (!item) {
+                console.error("Item not found for transaction modal.");
+                return;
+            }
+
+            const modalTitle = document.getElementById('transaction-modal-title');
+            const itemInfo = document.getElementById('transaction-item-info');
+            const dynamicInputContainer = document.getElementById('dynamic-transaction-input');
+            const form = document.getElementById('transaction-form');
+            const submitButton = document.getElementById('transaction-submit-button');
+
+            const costDisplay = item.costPerUnit ? `₹${item.costPerUnit.toFixed(2)}/unit` : 'FREE';
+
+            modalTitle.textContent = `${type} Stock: ${item.name} (${item.partNumber})`;
+            itemInfo.innerHTML = `Current Quantity: <span class="font-bold text-yellow-600">${item.quantity || 0}</span> | Cost/Unit: <span class="font-bold text-blue-600">${costDisplay}</span>`;
+            
+            form['transaction-item-id'].value = itemId;
+            form['transaction-type'].value = type;
+            form['transaction-quantity'].max = type === 'Issue' ? item.quantity : '';
+            form['transaction-quantity'].required = true;
+
+            dynamicInputContainer.innerHTML = ''; // Clear previous inputs
+
+            if (type === 'Issue') {
+                submitButton.textContent = 'Confirm Issue';
+                submitButton.classList.remove('hidden');
+                form['transaction-quantity'].value = 1;
+
+                dynamicInputContainer.innerHTML = `
+                    <div>
+                        <label for="student-name" class="block text-sm font-medium text-gray-700">Student Name (MANDATORY)</label>
+                        <input type="text" id="student-name" name="student-name" required 
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label for="student-sr-no" class="block text-sm font-medium text-gray-700">Student SR No. (MANDATORY)</label>
+                        <input type="text" id="student-sr-no" name="student-sr-no" required 
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500"
+                               list="student-sr-suggestions">
+                        <datalist id="student-sr-suggestions">
+                            ${studentSrNos.map(sr => `<option value="${sr}">`).join('')}
+                        </datalist>
+                    </div>
+                `;
+            } else { // Receive
+                submitButton.textContent = 'Confirm Manual Receive';
+                // For manual receive, quantity field is still needed
+                form['transaction-quantity'].value = 1;
+                form['transaction-quantity'].required = true;
+
+                // 1. Find all relevant outstanding 'Issue' transactions for partial/full return
+                const outstandingIssues = transactionsData.filter(tx => 
+                    tx.type === 'Issue' && 
+                    tx.itemId === itemId && 
+                    (tx.quantity - (tx.returnedQuantity || 0)) > 0
+                ).map(tx => {
+                    // Calculate outstanding quantity and current fine
+                    const issued = tx.quantity || 0;
+                    const returned = tx.returnedQuantity || 0;
+                    const outstanding = issued - returned;
+                    const currentFine = (tx.costPerUnit || 0.00) * outstanding;
+                    return { ...tx, outstanding, currentFine };
+                });
+
+                // Generate the new HTML with input fields for returns
+                dynamicInputContainer.innerHTML = `
+                    <div class="space-y-3">
+                        <h4 class="text-md font-semibold text-gray-800 border-b pb-1">Student Return Tracker (Process Partial/Full Return)</h4>
+                        ${outstandingIssues.length > 0 ? `
+                            <div class="max-h-60 overflow-y-auto border rounded-lg p-2 bg-gray-50 space-y-2">
+                                ${outstandingIssues.map(tx => {
+                                    const date = tx.timestamp ? new Date(tx.timestamp.toMillis()).toLocaleDateString() : 'N/A';
+                                    const returnId = `return-qty-${tx.id}`;
+                                    return `
+                                        <div class="p-3 bg-white rounded-lg shadow-sm border border-gray-200">
+                                            <div class="flex justify-between items-center mb-2">
+                                                <p class="font-medium text-gray-900">${tx.studentName} (SR: ${tx.studentSrNo})</p>
+                                                <span class="text-xs text-yellow-700 font-semibold">Fine: ₹${tx.currentFine.toFixed(2)}</span>
+                                            </div>
+                                            <p class="text-xs text-gray-500 mb-2">
+                                                Issued: ${date} | Total Issued: ${tx.quantity} | Returned: ${tx.returnedQuantity || 0}
+                                            </p>
+                                            <div class="flex space-x-2 items-end">
+                                                <div class="flex-grow">
+                                                    <label for="${returnId}" class="block text-xs font-medium text-gray-700">Return Qty (Max ${tx.outstanding})</label>
+                                                    <input type="number" id="${returnId}" min="1" max="${tx.outstanding}" value="${tx.outstanding}"
+                                                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 text-sm focus:ring-green-500 focus:border-green-500">
+                                                </div>
+                                                <button type="button" 
+                                                        onclick="handleProcessReturn('${tx.id}', document.getElementById('${returnId}').value)"
+                                                        class="flex-shrink-0 px-4 py-2 bg-green-500 text-white text-sm font-semibold rounded-lg shadow-md hover:bg-green-600 transition duration-150 h-[42px]">
+                                                    Return
+                                                </button>
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                            <p class="text-sm text-yellow-700 italic mt-2">Note: Returns update stock and recalculate the fine based on remaining outstanding quantity.</p>
+                        ` : `
+                            <p class="text-sm text-gray-500 p-3 bg-gray-100 rounded-lg">No open issue records found for this item.</p>
+                        `}
+                    </div>
+                    
+                    <h4 class="text-md font-semibold text-gray-800 mt-4 border-t pt-4">Manual Receive (For general stock or unlinked returns)</h4>
+                    <div>
+                        <label for="received-by" class="block text-sm font-medium text-gray-700">Received By / Source</label>
+                        <input type="text" id="received-by" name="received-by" value="Stock Received"
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                `;
+            }
+
+            openModal('transaction-modal');
+        };
+
+        /**
+         * Opens the edit item modal and populates fields.
+         */
+        window.openEditModal = (itemId) => {
+            const item = inventoryData[itemId];
+            if (!item) return;
+
+            document.getElementById('edit-item-id').value = item.id;
+            document.getElementById('edit-item-name').value = item.name;
+            document.getElementById('edit-part-number').value = item.partNumber;
+            document.getElementById('edit-package').value = item.package;
+            document.getElementById('edit-quantity').value = item.quantity;
+            document.getElementById('edit-cost-per-unit').value = item.costPerUnit || '0.00'; // NEW: Cost
+            document.getElementById('edit-max-quantity').value = item.maxQuantity || '';
+
+            openModal('edit-item-modal');
+        };
+
+        /**
+         * Handles tab switching in the main content area.
+         */
+        window.switchTab = (tabId) => {
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.add('hidden');
+            });
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('border-yellow-500', 'text-yellow-600', 'font-semibold');
+                button.classList.add('border-transparent', 'text-gray-500');
+            });
+
+            document.getElementById(tabId + '-content').classList.remove('hidden');
+            document.getElementById(tabId + '-button').classList.remove('border-transparent', 'text-gray-500');
+            document.getElementById(tabId + '-button').classList.add('border-yellow-500', 'text-yellow-600', 'font-semibold');
+        };
+        
+        /**
+         * Sets up event listeners to move focus to the next input field when Enter is pressed
+         * within the Add Item modal.
+         */
+        function setupEnterToNextField() {
+            const form = document.getElementById('add-item-form');
+            if (!form) return;
+
+            // Get all input elements in the desired order
+            const inputs = [
+                form.querySelector('[name="item-name"]'),
+                form.querySelector('[name="part-number"]'),
+                form.querySelector('[name="package"]'),
+                form.querySelector('[name="total-quantity"]'),
+                form.querySelector('[name="cost-per-unit"]'),
+                // The max-quantity input was removed, so it's excluded here.
+            ];
+            
+            // Filter out any null elements
+            const focusableInputs = inputs.filter(input => input !== null);
+
+            focusableInputs.forEach((input, index) => {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault(); // Prevent form submission
+                        
+                        // If there's a next input, focus it
+                        if (index < focusableInputs.length - 1) {
+                            focusableInputs[index + 1].focus();
+                        } else {
+                            // If it's the last input, focus the submit button
+                            form.querySelector('button[type="submit"]').focus();
+                        }
+                    }
+                });
+            });
+        }
+
+        // Initialize on load
+        window.onload = () => {
+            initializeFirebase();
+            setupEnterToNextField(); // Call the new function to enable Enter-to-next
+        };
     </script>
     <style>
-        body {
-            background-color: #ffffff;
+        /* Custom scrollbar for aesthetics */
+        body::-webkit-scrollbar {
+            width: 8px;
         }
-        .glow-focus:focus {
-            outline: none;
-            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.4);
+        body::-webkit-scrollbar-thumb {
+            background-color: #fcd34d; /* yellow-300 */
+            border-radius: 20px;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+        }
+        /* Style for the Modal backdrop */
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.6);
         }
     </style>
 </head>
-<body class="bg-gray-50 text-gray-800 font-['Inter'] flex flex-col min-h-screen">
-    <div class="container mx-auto p-4 md:p-8 flex-grow">
-        <!-- Header and Navigation -->
-        <header class="bg-white rounded-2xl shadow-2xl p-6 mb-8 transform hover:scale-105 transition-transform duration-300">
-            <div class="flex flex-col md:flex-row justify-between items-center mb-4">
-                <h1 class="text-3xl md:text-4xl font-extrabold text-indigo-700 mb-2 md:mb-0">DESE Inventory System</h1>
-                <p id="user-id-display" class="text-sm font-medium text-gray-500 bg-gray-100 px-4 py-2 rounded-full border border-gray-200 shadow-inner"></p>
+<body class="min-h-screen">
+
+    <!-- Message Box (Toast Notification) -->
+    <div id="message-box" class="fixed top-4 right-4 z-50 transition-transform duration-300 transform translate-x-full p-3 rounded-md shadow-lg" role="alert"></div>
+
+    <!-- Main Application Container -->
+    <div class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        
+        <!-- Header -->
+        <header class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 mb-6">
+            <h1 class="text-3xl font-extrabold text-gray-900 flex items-center">
+                <span class="text-yellow-500 mr-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7z" />
+                        <path fill-rule="evenodd" d="M18 11v5a2 2 0 01-2 2H4a2 2 0 01-2-2v-5l4-3.582V7a1 1 0 011-1h6a1 1 0 011 1v.418L18 11zm-6 2a2 2 0 10-4 0h4z" clip-rule="evenodd" />
+                    </svg>
+                </span>
+                DESE Electronics Inventory
+            </h1>
+            <div class="text-sm text-gray-500 mt-2 sm:mt-0">
+                <p>User ID: <span id="current-user-id" class="font-mono text-yellow-600">Loading...</span></p>
+                <p id="app-status">Status: Online</p>
             </div>
-            <nav class="flex flex-wrap gap-2 md:gap-4 font-semibold text-gray-700">
-                <button id="inventory-link" data-view-id="inventory-view" class="px-6 py-3 rounded-full hover:bg-indigo-500 hover:text-white transition-colors duration-200 transform hover:-translate-y-1 shadow-lg">
-                    <i class="fas fa-boxes mr-2"></i>Inventory
-                </button>
-                <button id="stock-in-link" data-view-id="stock-in-view" class="px-6 py-3 rounded-full hover:bg-indigo-500 hover:text-white transition-colors duration-200 transform hover:-translate-y-1 shadow-lg">
-                    <i class="fas fa-arrow-alt-circle-down mr-2"></i>Stock In
-                </button>
-                <button id="stock-out-link" data-view-id="stock-out-view" class="px-6 py-3 rounded-full hover:bg-indigo-500 hover:text-white transition-colors duration-200 transform hover:-translate-y-1 shadow-lg">
-                    <i class="fas fa-arrow-alt-circle-up mr-2"></i>Stock Out
-                </button>
-                <button id="transactions-link" data-view-id="transactions-view" class="px-6 py-3 rounded-full hover:bg-indigo-500 hover:text-white transition-colors duration-200 transform hover:-translate-y-1 shadow-lg">
-                    <i class="fas fa-history mr-2"></i>Transactions
-                </button>
-            </nav>
-            <div id="message-box" class="hidden"></div>
         </header>
 
-        <!-- Inventory View -->
-        <main id="inventory-view" class="app-view">
-            <div class="bg-white rounded-2xl shadow-xl p-6">
-                <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-                    <h2 class="text-2xl md:text-3xl font-bold text-gray-900">Current Inventory</h2>
-                    <div class="flex flex-col md:flex-row gap-2 w-full md:w-auto">
-                        <input type="text" id="search-input" placeholder="Search inventory..." class="flex-grow md:flex-grow-0 px-4 py-2 rounded-full border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors duration-200 shadow-inner glow-focus">
-                        <label class="px-4 py-2 bg-blue-500 text-white font-semibold rounded-full shadow-md hover:bg-blue-600 transition-colors duration-200 cursor-pointer text-center flex items-center justify-center space-x-2">
-                            <i class="fas fa-file-import"></i>
-                            <span>Import CSV</span>
-                            <input type="file" id="import-csv-input" accept=".csv" class="hidden">
-                        </label>
-                        <button id="export-inventory-btn" class="px-4 py-2 bg-green-500 text-white font-semibold rounded-full shadow-md hover:bg-green-600 transition-colors duration-200 flex items-center justify-center space-x-2">
-                            <i class="fas fa-file-export"></i>
-                            <span>Export CSV</span>
-                        </button>
-                        <button id="clear-inventory-btn" class="px-4 py-2 bg-red-500 text-white font-semibold rounded-full shadow-md hover:bg-red-600 transition-colors duration-200 flex items-center justify-center space-x-2">
-                            <i class="fas fa-trash-alt"></i>
-                            <span>Clear Inventory</span>
-                        </button>
-                    </div>
-                </div>
-                <div id="message-box-import" class="mb-4"></div>
-                <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-inner">
-                    <table class="min-w-full bg-white divide-y divide-gray-200">
-                        <thead class="bg-gray-100">
+        <!-- Tab Navigation -->
+        <div class="border-b border-gray-200">
+            <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+                <button id="inventory-button" onclick="switchTab('inventory')" class="tab-button whitespace-nowrap py-4 px-1 border-b-2 font-semibold text-sm border-yellow-500 text-yellow-600">
+                    Current Inventory
+                </button>
+                <button id="transactions-button" onclick="switchTab('transactions')" class="tab-button whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700">
+                    Transaction History
+                </button>
+            </nav>
+        </div>
+
+        <!-- Inventory Tab Content -->
+        <div id="inventory-content" class="tab-content mt-6">
+            <div class="flex justify-end mb-4 space-x-3">
+                <!-- Clear Inventory Button with Confirmation -->
+                <button onclick="openConfirmationModal('Clear Inventory', 'Are you absolutely sure you want to permanently delete ALL inventory items? This action cannot be undone.', clearInventory)" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-full shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                    </svg>
+                    Clear Inventory
+                </button>
+                <!-- Add New Item Button -->
+                <button onclick="openModal('add-item-modal')" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-full shadow-sm text-white bg-yellow-500 hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd" />
+                    </svg>
+                    Add New Item
+                </button>
+            </div>
+            
+            <!-- Inventory Table -->
+            <div class="bg-white shadow-xl rounded-xl overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-yellow-50">
                             <tr>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Item Name</th>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Part Number</th>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Package</th>
-                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Stock In</th>
-                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Stock Out</th>
-                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Quantity</th>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Updated</th>
-                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Part Number</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Package</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock Qty</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cost/Unit (₹)</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Max Qty</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="inventory-list" class="divide-y divide-gray-200">
-                            <!-- Inventory items will be dynamically inserted here -->
+                        <tbody id="inventory-table-body" class="bg-white divide-y divide-gray-200">
+                            <!-- Inventory items will be rendered here -->
+                            <tr><td colspan="7" class="p-4 text-center text-gray-500">Loading inventory...</td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
-        </main>
+        </div>
 
-        <!-- Stock In View -->
-        <main id="stock-in-view" class="app-view hidden">
-            <div class="bg-white rounded-2xl shadow-xl p-6">
-                <h2 class="text-3xl font-bold text-gray-900 mb-6">Stock In Items</h2>
-                <div id="message-box-stock-in" class="mt-4"></div>
-                <form id="stock-in-form" class="space-y-4">
-                    <div>
-                        <label for="stock-in-item-name" class="block text-sm font-medium text-gray-700">Item Name</label>
-                        <input type="text" id="stock-in-item-name" name="item-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
-                    </div>
-                    <div>
-                        <label for="stock-in-part-number" class="block text-sm font-medium text-gray-700">Part Number</label>
-                        <input type="text" id="stock-in-part-number" name="part-number" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
-                    </div>
-                    <div>
-                        <label for="stock-in-package" class="block text-sm font-medium text-gray-700">Package</label>
-                        <input type="text" id="stock-in-package" name="package" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
-                    </div>
-                    <div>
-                        <label for="stock-in-quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
-                        <input type="number" id="stock-in-quantity" name="quantity" required min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
-                    </div>
-                    <button type="submit" class="w-full py-3 px-4 bg-indigo-600 text-white font-semibold rounded-full shadow-md hover:bg-indigo-700 transition-colors duration-200 transform hover:-translate-y-1">
-                        <i class="fas fa-plus-circle mr-2"></i>Add to Stock
-                    </button>
-                </form>
+        <!-- Transaction History Tab Content -->
+        <div id="transactions-content" class="tab-content mt-6 hidden">
+            <div class="flex justify-end mb-4">
+                 <!-- Clear Transactions Button with Confirmation -->
+                <button onclick="openConfirmationModal('Clear Transactions', 'Are you absolutely sure you want to permanently delete ALL transaction history? This action cannot be undone.', clearTransactions)" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-full shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zm-1.414 7.071L10 11.586V16h4v-2.414l2.414-2.414L15.999 11l-2.828-2.828z" />
+                        <path fill-rule="evenodd" d="M10 2a1 1 0 00-1 1v1h2V3a1 1 0 10-2 0zM4 6a2 2 0 00-2 2v6a2 2 0 002 2h12a2 2 0 002-2V8a2 2 0 00-2-2h-3.382l-.724-1.447A1 1 0 0011 3H9a1 1 0 00-.894.553L7.382 6H4zM16 8H4v6h12V8z" clip-rule="evenodd" />
+                    </svg>
+                    Clear Transactions
+                </button>
             </div>
-        </main>
-
-        <!-- Stock Out View -->
-        <main id="stock-out-view" class="app-view hidden">
-            <div class="bg-white rounded-2xl shadow-xl p-6">
-                <h2 class="text-3xl font-bold text-gray-900 mb-6">Stock Out Items</h2>
-                <div id="message-box-stock-out" class="mt-4"></div>
-                <form id="stock-out-form" class="space-y-4">
-                    <div>
-                        <label for="stock-out-student-name" class="block text-sm font-medium text-gray-700">Student Name</label>
-                        <input type="text" id="stock-out-student-name" name="student-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
-                    </div>
-                    <div>
-                        <label for="stock-out-sr-number" class="block text-sm font-medium text-gray-700">SR Number</label>
-                        <input type="text" id="stock-out-sr-number" name="sr-number" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 bg-gray-100 cursor-not-allowed">
-                        <p id="student-autofill-message" class="mt-2 text-sm text-gray-500"></p>
-                    </div>
-                    <div>
-                        <label for="stock-out-item-name" class="block text-sm font-medium text-gray-700">Item Name</label>
-                        <input type="text" id="stock-out-item-name" name="item-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
-                        <div id="item-suggestions" class="bg-white border border-gray-300 rounded-lg mt-2 shadow-lg max-h-48 overflow-y-auto hidden"></div>
-                        <p id="autofill-message-stock-out" class="mt-2 text-sm text-gray-500"></p>
-                    </div>
-                    <div>
-                        <label for="stock-out-part-number" class="block text-sm font-medium text-gray-700">Part Number</label>
-                        <input type="text" id="stock-out-part-number" name="part-number" required readonly class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 bg-gray-100 cursor-not-allowed">
-                    </div>
-                    <div>
-                        <label for="stock-out-package" class="block text-sm font-medium text-gray-700">Package</label>
-                        <input type="text" id="stock-out-package" name="package" required readonly class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 bg-gray-100 cursor-not-allowed">
-                    </div>
-                    <div>
-                        <label for="stock-out-quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
-                        <input type="number" id="stock-out-quantity" name="quantity" required min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500 glow-focus">
-                    </div>
-                    <button type="submit" class="w-full py-3 px-4 bg-indigo-600 text-white font-semibold rounded-full shadow-md hover:bg-indigo-700 transition-colors duration-200 transform hover:-translate-y-1">
-                        <i class="fas fa-minus-circle mr-2"></i>Stock Out
-                    </button>
-                </form>
-            </div>
-        </main>
-        
-        <!-- Transactions View -->
-        <main id="transactions-view" class="app-view hidden">
-            <div class="bg-white rounded-2xl shadow-xl p-6">
-                <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-                    <h2 class="text-3xl font-bold text-gray-900">Transaction History</h2>
-                    <div class="flex flex-col md:flex-row gap-2 w-full md:w-auto">
-                        <input type="text" id="transaction-search-input" placeholder="Search transactions..." class="flex-grow md:flex-grow-0 px-4 py-2 rounded-full border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors duration-200 shadow-inner glow-focus">
-                        <button id="export-transactions-btn" class="px-4 py-2 bg-green-500 text-white font-semibold rounded-full shadow-md hover:bg-green-600 transition-colors duration-200 flex items-center justify-center space-x-2">
-                            <i class="fas fa-file-export"></i>
-                            <span>Export CSV</span>
-                        </button>
-                        <button id="clear-transactions-btn" class="px-4 py-2 bg-red-500 text-white font-semibold rounded-full shadow-md hover:bg-red-600 transition-colors duration-200 flex items-center justify-center space-x-2">
-                            <i class="fas fa-trash-alt"></i>
-                            <span>Clear Transactions</span>
-                        </button>
-                    </div>
-                </div>
-                <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-inner">
-                    <table class="min-w-full bg-white divide-y divide-gray-200">
-                        <thead class="bg-gray-100">
+            <div class="bg-white shadow-xl rounded-xl overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
                             <tr>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Student Name</th>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">SR Number</th>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Item Name</th>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Part Number</th>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Package</th>
-                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Quantity</th>
-                                <th class="p-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Timestamp</th>
-                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
-                                <th class="p-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Part Number</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type / Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">To/From</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fine (₹)</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Challan</th>
                             </tr>
                         </thead>
-                        <tbody id="transactions-list" class="divide-y divide-gray-200">
-                            <!-- Transactions will be dynamically inserted here -->
+                        <tbody id="transaction-history-body" class="bg-white divide-y divide-gray-200">
+                            <!-- Transaction records will be rendered here -->
+                            <tr><td colspan="8" class="p-4 text-center text-gray-500">Loading transactions...</td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
-        </main>
+        </div>
 
-        <!-- Edit View -->
-        <main id="edit-view" class="app-view hidden">
-            <div class="bg-white rounded-2xl shadow-xl p-6">
-                <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-3xl font-bold text-gray-900">Edit Item</h2>
-                    <button id="back-to-inventory" class="px-4 py-2 bg-gray-200 text-gray-700 font-semibold rounded-full shadow-md hover:bg-gray-300 transition-colors duration-200">
-                        <i class="fas fa-arrow-left mr-2"></i>Go Back
-                    </button>
+    </div>
+    
+    <!-- Hidden Container for PDF generation -->
+    <div id="pdf-container" class="hidden"></div>
+
+    <!-- --- Modals --- -->
+
+    <!-- Generic Confirmation Modal (New) -->
+    <div id="confirmation-modal" class="hidden fixed inset-0 z-40 overflow-y-auto">
+        <div class="modal-backdrop fixed inset-0 transition-opacity"></div>
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm relative">
+                <button onclick="closeModal('confirmation-modal')" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+                <div class="text-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="mx-auto h-12 w-12 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.444 2.83-1.444 3.597 0l1.75 3.303a1.5 1.5 0 001.07.72l3.655.447c1.597.195 2.21 2.053 1.07 3.203l-2.673 2.766a1.5 1.5 0 00-.472 1.258l.63 3.655c.273 1.597-1.298 2.585-2.73 1.892l-3.303-1.75a1.5 1.5 0 00-1.258 0l-3.303 1.75c-1.432.693-3.003-.295-2.73-1.892l.63-3.655a1.5 1.5 0 00-.472-1.258L.797 10.772c-1.14-1.15-.527-3.008 1.07-3.203l3.655-.447a1.5 1.5 0 001.07-.72l1.75-3.303zM10 13a1 1 0 100 2 1 1 0 000-2zm0-8a1 1 0 011 1v4a1 1 0 11-2 0V6a1 1 0 011-1z" clip-rule="evenodd" />
+                    </svg>
+                    <h3 id="confirmation-modal-title" class="text-lg font-medium leading-6 text-gray-900 mt-3">Confirm Action</h3>
+                    <p id="confirmation-modal-message" class="mt-2 text-sm text-gray-500">Are you sure you want to proceed?</p>
                 </div>
-                <div id="message-box-edit" class="mt-4"></div>
-                <form id="edit-form" class="space-y-4">
-                    <div>
-                        <label for="edit-item-name" class="block text-sm font-medium text-gray-700">Item Name</label>
-                        <input type="text" id="edit-item-name" name="item-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500 glow-focus">
-                    </div>
-                    <div>
-                        <label for="edit-part-number" class="block text-sm font-medium text-gray-700">Part Number</label>
-                        <input type="text" id="edit-part-number" name="part-number" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500 glow-focus">
-                    </div>
-                    <div>
-                        <label for="edit-package" class="block text-sm font-medium text-gray-700">Package</label>
-                        <input type="text" id="edit-package" name="package" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500 glow-focus">
-                    </div>
-                    <div>
-                        <label for="edit-quantity" class="block text-sm font-medium text-gray-700">Total Quantity</label>
-                        <input type="number" id="edit-quantity" name="quantity" required min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500 glow-focus">
-                    </div>
-                    <button type="submit" class="w-full py-3 px-4 bg-yellow-500 text-white font-semibold rounded-full shadow-md hover:bg-yellow-600 transition-colors duration-200 transform hover:-translate-y-1">
-                        <i class="fas fa-save mr-2"></i>Save Changes
+                
+                <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+                    <button type="button" id="confirmation-modal-button" class="inline-flex justify-center w-full rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:col-start-2 sm:text-sm">
+                        Confirm Delete
                     </button>
-                </form>
-            </div>
-        </main>
-
-        <!-- Confirmation Modal -->
-        <div id="confirmation-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 hidden">
-            <div class="bg-white rounded-2xl shadow-lg p-8 max-w-sm mx-auto">
-                <p id="confirmation-message" class="text-center font-semibold mb-6"></p>
-                <div class="flex justify-center space-x-4">
-                    <button id="confirm-yes" class="px-6 py-2 bg-red-500 text-white font-bold rounded-full hover:bg-red-600 transition-colors duration-200">Yes</button>
-                    <button id="confirm-no" class="px-6 py-2 bg-gray-300 text-gray-800 font-bold rounded-full hover:bg-gray-400 transition-colors duration-200">No</button>
+                    <button type="button" onclick="closeModal('confirmation-modal')" class="mt-3 inline-flex justify-center w-full rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 sm:mt-0 sm:col-start-1 sm:text-sm">
+                        Cancel
+                    </button>
                 </div>
             </div>
         </div>
     </div>
+
+
+    <!-- Add Item Modal -->
+    <div id="add-item-modal" class="hidden fixed inset-0 z-40 overflow-y-auto">
+        <div class="modal-backdrop fixed inset-0 transition-opacity"></div>
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md relative">
+                <button onclick="closeModal('add-item-modal')" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+                <h3 class="text-xl font-bold leading-6 text-gray-900 mb-6 border-b pb-2">Add New Inventory Item</h3>
+                
+                <form id="add-item-form" onsubmit="handleAddItem(event)" class="space-y-4">
+                    <div>
+                        <label for="item-name" class="block text-sm font-medium text-gray-700">Item Name</label>
+                        <input type="text" id="item-name" name="item-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label for="part-number" class="block text-sm font-medium text-gray-700">Part Number</label>
+                        <input type="text" id="part-number" name="part-number" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label for="package" class="block text-sm font-medium text-gray-700">Package (e.g., DIP, SMD)</label>
+                        <input type="text" id="package" name="package" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label for="total-quantity" class="block text-sm font-medium text-gray-700">Initial Quantity</label>
+                        <input type="number" id="total-quantity" name="total-quantity" required min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <!-- Cost Per Unit Field -->
+                    <div>
+                        <label for="cost-per-unit" class="block text-sm font-medium text-gray-700">Cost/Fine Per Unit (₹)</label>
+                        <input type="number" step="0.01" id="cost-per-unit" name="cost-per-unit" value="0.00" min="0" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <!-- Max Quantity field removed as requested -->
+                    
+                    <button type="submit" class="w-full py-3 px-4 bg-yellow-500 text-white font-semibold rounded-full shadow-md hover:bg-yellow-600 transition duration-150">
+                        Add Item
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Item Modal -->
+    <div id="edit-item-modal" class="hidden fixed inset-0 z-40 overflow-y-auto">
+        <div class="modal-backdrop fixed inset-0 transition-opacity"></div>
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md relative">
+                <button onclick="closeModal('edit-item-modal')" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+                <h3 class="text-xl font-bold leading-6 text-gray-900 mb-6 border-b pb-2">Edit Inventory Item</h3>
+                
+                <form id="edit-item-form" onsubmit="handleEditItem(event)" class="space-y-4">
+                    <input type="hidden" id="edit-item-id" name="edit-item-id">
+                    <div>
+                        <label for="edit-item-name" class="block text-sm font-medium text-gray-700">Item Name</label>
+                        <input type="text" id="edit-item-name" name="edit-item-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label for="edit-part-number" class="block text-sm font-medium text-gray-700">Part Number</label>
+                        <input type="text" id="edit-part-number" name="edit-part-number" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label for="edit-package" class="block text-sm font-medium text-gray-700">Package</label>
+                        <input type="text" id="edit-package" name="edit-package" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label for="edit-quantity" class="block text-sm font-medium text-gray-700">Total Quantity</label>
+                        <input type="number" id="edit-quantity" name="edit-quantity" required min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <!-- NEW: Edit Cost Per Unit Field -->
+                    <div>
+                        <label for="edit-cost-per-unit" class="block text-sm font-medium text-gray-700">Cost/Fine Per Unit (₹)</label>
+                        <input type="number" step="0.01" id="edit-cost-per-unit" name="edit-cost-per-unit" min="0" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label for="edit-max-quantity" class="block text-sm font-medium text-gray-700">Max Quantity</label>
+                        <input type="number" id="edit-max-quantity" name="edit-max-quantity" min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                    </div>
+                    <button type="submit" class="w-full py-3 px-4 bg-yellow-500 text-white font-semibold rounded-full shadow-md hover:bg-yellow-600 transition duration-150">
+                        Save Changes
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Transaction Modal (Issue/Receive) -->
+    <div id="transaction-modal" class="hidden fixed inset-0 z-40 overflow-y-auto">
+        <div class="modal-backdrop fixed inset-0 transition-opacity"></div>
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md relative">
+                <button onclick="closeModal('transaction-modal')" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+                <h3 id="transaction-modal-title" class="text-xl font-bold leading-6 text-gray-900 mb-2 border-b pb-2">Process Stock</h3>
+                <p id="transaction-item-info" class="text-sm text-gray-500 mb-4"></p>
+
+                <form id="transaction-form" onsubmit="handleTransaction(event)" class="space-y-4">
+                    <input type="hidden" name="transaction-item-id">
+                    <input type="hidden" name="transaction-type">
+
+                    <div id="dynamic-transaction-input" class="space-y-4">
+                        <!-- Student Name/SR No or Received By field will be injected here -->
+                    </div>
+
+                    <div>
+                        <label for="transaction-quantity" class="block text-sm font-medium text-gray-700">Quantity</label>
+                        <input type="number" id="transaction-quantity" name="transaction-quantity" required min="1" 
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-3 focus:ring-yellow-500 focus:border-yellow-500">
+                        <p class="text-xs text-gray-500 mt-1">Note: For 'Issue' transactions, the quantity is limited by current stock. For 'Manual Receive', this is for stock replenishment.</p>
+                    </div>
+
+                    <button type="submit" id="transaction-submit-button" class="w-full py-3 px-4 bg-yellow-500 text-white font-semibold rounded-full shadow-md hover:bg-yellow-600 transition duration-150">
+                        Confirm Transaction
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+
 </body>
 </html>
